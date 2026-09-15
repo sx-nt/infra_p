@@ -87,3 +87,93 @@ de geração de grades de horários.
 
 Uma grade publicada não deve ser alterada silenciosamente. Correções devem
 gerar uma nova versão ou registrar explicitamente a alteração no histórico.
+
+
+## Diagramas
+
+### 1. Autenticação e funções do professor
+
+```mermaid
+flowchart LR
+
+    Professor["Professor"]
+    Google["Google Calendar"]
+
+    subgraph Sistema["Sistema de Planejamento de Grades"]
+
+        Login(("Fazer login"))
+        Disponibilidade(("Informar disponibilidade"))
+        Sincronizar(("Sincronizar Google Calendar"))
+        Visualizar(("Visualizar grade publicada"))
+
+    end
+
+    Professor --> Login
+    Professor --> Disponibilidade
+    Professor --> Sincronizar
+    Professor --> Visualizar
+
+    Google --> Sincronizar
+```
+
+### 2. Gestão acadêmica
+```mermaid
+flowchart LR
+
+    Coordenador["Coordenador"]
+    Administrador["Administrador"]
+
+    subgraph Sistema["Sistema de Planejamento de Grades"]
+
+        CadProfessor(("Cadastrar professor"))
+        CadDisciplina(("Cadastrar disciplina"))
+        CadTurma(("Cadastrar turma"))
+        Associar(("Associar professor à disciplina"))
+        Usuarios(("Gerenciar usuários"))
+
+    end
+
+    Coordenador --> CadProfessor
+    Coordenador --> CadDisciplina
+    Coordenador --> CadTurma
+    Coordenador --> Associar
+
+    Administrador --> Usuarios
+```
+
+### 3. Geração e publicação da grade
+```mermaid
+flowchart LR
+
+    Coordenador["Coordenador"]
+    Administrador["Administrador"]
+    Email["Provedor de e-mail"]
+
+    subgraph Sistema["Sistema de Planejamento de Grades"]
+
+        Gerar(("Gerar grade"))
+        Validar(("Validar grade"))
+        Ajustar(("Ajustar grade"))
+        Aprovar(("Aprovar grade"))
+        Publicar(("Publicar grade"))
+        Notificar(("Enviar notificação"))
+
+    end
+
+    Coordenador --> Gerar
+    Coordenador --> Validar
+    Coordenador --> Ajustar
+    Coordenador --> Aprovar
+    Coordenador --> Publicar
+
+    Administrador --> Gerar
+    Administrador --> Validar
+    Administrador --> Ajustar
+    Administrador --> Aprovar
+    Administrador --> Publicar
+
+    Publicar --> Notificar
+    Email --> Notificar
+```
+
+    
