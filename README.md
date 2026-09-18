@@ -16,7 +16,9 @@ restrições importadas do Google Calendar.
 | [Regras de negócio](docs/regras-de-negocios.md) | Restrições que devem ser respeitadas pela aplicação e pelo algoritmo. |
 | [Casos de uso](docs/casos-de-uso.md) | Principais interações entre os atores e o sistema. |
 | [Diagrama de Classe](docs/diagrama-classe.md) |Diagrama de Classe. | 
-| [Diagrama de Atividade](docs/diagrama-atividade.md) |Fluxo principal do sistema, desde o cadastro até a publicação da grade. | 
+| [Diagrama de Atividade](docs/diagrama-atividade.md) |Fluxo principal do sistema, desde o cadastro até a publicação da grade. |
+| [Diagramas de blocos](docs/diagramas-de-blocos.md) | Arquitetura lógica, fluxo principal e ciclo de vida da grade. |
+| [Fluxogramas](docs/fluxogramas.md) | Processos de autenticação, sincronização, gestão acadêmica e publicação. |
 
 ## Visão geral
 
