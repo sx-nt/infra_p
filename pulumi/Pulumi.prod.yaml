@@ -1,2 +1,5 @@
 config:
+  aws:zoneId: Z08495123KE7P30ERBKKH
+  aws:roleArn: arn:aws:iam::789223369510:role/route53-rr-role
+  aws:externalId: d1a9c7cb734aa4f99100a4cc29c29782
   aws:region: sa-east-1
