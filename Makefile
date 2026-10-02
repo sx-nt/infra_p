@@ -1,3 +1,5 @@
+.PHONY: all install aws_cli aws_sam_cli pulumi uv shell check
+
 all: install
 
 install: aws_cli aws_sam_cli pulumi uv shell
@@ -23,11 +25,14 @@ aws_sam_cli:
 	rm -rf sam-installation
 
 pulumi:
-	curl -fsSL https://get.pulumi.com | shN
+	curl -fsSL https://get.pulumi.com | sh
 
 uv:
 	curl -LsSf https://astral.sh/uv/install.sh | sh
 
 shell:
-	echo "complete -C ${HOME}/.local/bin/aws_completer aws" > ${HOME}/.bashrc
-	echo "export PATH=${PATH}:${HOME}/.local/bin:${HOME}/.pulumi/bin" >> ${HOME}/.bashrc
+	@echo "Instalação concluída. Adicione ao PATH da sua sessão:"
+	@echo 'export PATH="$$HOME/.local/bin:$$HOME/.pulumi/bin:$$PATH"'
+
+check:
+	python3 -m py_compile pulumi/__main__.py

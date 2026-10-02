@@ -1,10 +1,18 @@
-"""An AWS Python Pulumi program"""
+"""Infraestrutura AWS do Classly."""
 
 import pulumi
 from pulumi_aws import s3
 
-# Create an AWS resource (S3 Bucket)
-bucket = s3.Bucket('my-bucket')
+stack = pulumi.get_stack()
 
-# Export the name of the bucket
-pulumi.export('bucket_name', bucket.id)
+# O estado de dev e prod é separado pelo Pulumi; o nome lógico pode ser igual.
+bucket = s3.Bucket(
+    "classly-assets",
+    tags={
+        "Project": "Classly",
+        "Environment": stack,
+    },
+)
+
+pulumi.export("environment", stack)
+pulumi.export("bucket_name", bucket.id)
