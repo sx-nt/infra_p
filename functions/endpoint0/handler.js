@@ -1,1 +1,0 @@
-//função handler lambda para cada enpoint necessário 

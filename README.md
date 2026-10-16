@@ -19,6 +19,7 @@ restrições importadas do Google Calendar.
 | [Diagrama de Atividade](docs/diagrama-atividade.md) |Fluxo principal do sistema, desde o cadastro até a publicação da grade. |
 | [Diagramas de blocos](docs/diagramas-de-blocos.md) | Arquitetura lógica, fluxo principal e ciclo de vida da grade. |
 | [Fluxogramas](docs/fluxogramas.md) | Processos de autenticação, sincronização, gestão acadêmica e publicação. |
+| [API e modelo de dados](docs/api.md) | Contrato inicial dos endpoints serverless e tabelas DynamoDB. |
 
 ## Visão geral
 
@@ -49,6 +50,16 @@ Esta documentação cobre:
 - notificações e auditoria;
 - requisitos de qualidade e infraestrutura.
 
-Detalhes de implementação, como stack tecnológica, modelo físico do banco e
-contratos finais da API, devem ser adicionados quando forem definidos pelo
-projeto.
+## Infraestrutura da Sprint 3
+
+O backend inicial está em `aws-sam/`: AWS SAM expõe a API REST e provisiona
+tabelas DynamoDB para professores, disciplinas, turmas, habilitações,
+disponibilidades e grades, com handlers Lambda separados por domínio. O `docker compose` do diretório inicia DynamoDB
+Local e cria o mesmo modelo para desenvolvimento.
+
+O contrato implementado e os passos para executar a API localmente estão em
+[docs/api.md](docs/api.md) e [aws-sam/README.md](aws-sam/README.md). Login
+federado, chamada direta ao Google Calendar, algoritmo automático de geração,
+aprovação/publicação com controle de acesso e notificações dependem de
+integrações e decisões ainda não configuradas no repositório; a API atual
+aceita restrições fornecidas pelo cliente e valida/salva rascunhos de grade.

@@ -1,0 +1,1 @@
+"""Teacher availability endpoints."""

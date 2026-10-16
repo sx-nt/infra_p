@@ -24,7 +24,7 @@ flowchart LR
     end
 
     subgraph dados ["Persistência AWS"]
-        rds["Amazon RDS for PostgreSQL"]
+    dynamodb["Amazon DynamoDB"]
     end
 
     subgraph observabilidade ["Operação AWS"]
@@ -44,7 +44,7 @@ flowchart LR
     navegador -.->|"Login federado"| cognito
     cognito -.->|"IdP externo"| googleOAuth
     apiGateway -->|"Rotas autenticadas"| lambda
-    lambda -->|"Lê e grava"| rds
+    lambda -->|"Lê e grava"| dynamodb
     lambda -.->|"Importa restrições"| googleCalendar
     lambda -.->|"Envia e-mail"| ses
     lambda -.->|"Logs e métricas"| cloudWatch
@@ -57,7 +57,7 @@ flowchart LR
 | Entrada | Amazon API Gateway | Expor a API HTTPS para o frontend. |
 | Autenticação | Amazon Cognito + Google OAuth | Autenticar usuários e fornecer tokens para a API. |
 | Computação | AWS Lambda | Executar API, domínio, geração, validação e notificações em uma função inicial. |
-| Banco | Amazon RDS for PostgreSQL | Persistir usuários, estrutura curricular, grades, alocações e auditoria. |
+| Banco | Amazon DynamoDB | Persistir professores, estrutura curricular, habilitações, disponibilidades e rascunhos de grade. |
 | E-mail | Amazon SES | Enviar a comunicação de publicação da grade. |
 | Observabilidade | Amazon CloudWatch | Centralizar logs, métricas e falhas operacionais. |
 
