@@ -1,92 +1,68 @@
- # AWS Python S3 Bucket Pulumi Template
+# Infraestrutura em nuvem do Classly (Pulumi)
 
- A minimal Pulumi template for provisioning a single AWS S3 bucket using Python.
+Programa Pulumi em Python que publica o backend do Classly na AWS. As funções
+Lambda usam o mesmo código de [`aws-sam/functions`](../aws-sam/functions), que
+também roda localmente com SAM + DynamoDB Local.
 
- ## Overview
+## Recursos
 
- This template provisions an S3 bucket (`pulumi_aws.s3.BucketV2`) in your AWS account and exports its ID as an output. It’s an ideal starting point when:
-  - You want to learn Pulumi with AWS in Python.
-  - You need a barebones S3 bucket deployment to build upon.
-  - You prefer a minimal template without extra dependencies.
+| Recurso | dev | prod |
+| --- | --- | --- |
+| DynamoDB: 6 tabelas sob demanda (professores, disciplinas, turmas, habilitações, disponibilidades, grades) | ✓ | ✓ (com point-in-time recovery) |
+| Lambda: uma função por domínio, com papel IAM próprio restrito às tabelas que usa | ✓ | ✓ |
+| CloudWatch Logs: um grupo por função, retenção de 14 dias | ✓ | ✓ |
+| API Gateway (HTTP API) com as rotas de [`docs/api.md`](../docs/api.md) | ✓ | ✓ |
+| CloudFront na frente da API, HTTPS obrigatório, sem cache | domínio `*.cloudfront.net` | domínio próprio |
+| ACM: certificado em `us-east-1` validado por DNS | — | ✓ |
+| Route 53: registro de validação e alias `A`/`AAAA` para a CDN | — | ✓ (zona compartilhada) |
 
- ## Prerequisites
+O tráfego segue `navegador → CloudFront (HTTPS) → API Gateway → Lambda → DynamoDB`.
 
- - An AWS account with permissions to create S3 buckets.
- - AWS credentials configured in your environment (for example via AWS CLI or environment variables).
- - Python 3.6 or later installed.
- - Pulumi CLI already installed and logged in.
+## Stacks e configuração
 
- ## Getting Started
+| Chave | Stack | Descrição |
+| --- | --- | --- |
+| `aws:region` | dev, prod | Região padrão (`sa-east-1`). |
+| `classly:domain` | prod | Domínio público do sistema. |
+| `classly:zoneId` | prod | Hosted zone do domínio no Route 53. |
+| `classly:route53RoleArn` | prod | Papel assumido para gravar registros na zona, que pertence a outra conta. |
+| `classly:route53ExternalId` | prod | External ID exigido pelo papel acima. |
 
- 1. Generate a new project from this template:
-    ```bash
-    pulumi new aws-python
-    ```
- 2. Follow the prompts to set your project name and AWS region (default: `us-east-1`).
- 3. Change into your project directory:
-    ```bash
-    cd <project-name>
-    ```
- 4. Preview the planned changes:
-    ```bash
-    pulumi preview
-    ```
- 5. Deploy the stack:
-    ```bash
-    pulumi up
-    ```
- 6. Tear down when finished:
-    ```bash
-    pulumi destroy
-    ```
+Antes do primeiro `up` em produção:
 
- ## Project Layout
+```bash
+pulumi config set classly:domain <dominio> -s prod
+```
 
- After running `pulumi new`, your directory will look like:
- ```
- ├── __main__.py         # Entry point of the Pulumi program
- ├── Pulumi.yaml         # Project metadata and template configuration
- ├── requirements.txt    # Python dependencies
- └── Pulumi.<stack>.yaml # Stack-specific configuration (e.g., Pulumi.dev.yaml)
- ```
+## Execução
 
- ## Configuration
+Pré-requisitos: credenciais AWS e `PULUMI_ACCESS_TOKEN` (ver
+[README principal](../README.md#preparação-do-ambiente)) e `uv`.
 
- This template defines the following config value:
+```bash
+cd pulumi
+pulumi stack select dev   # ou prod
+pulumi preview
+pulumi up
+```
 
- - `aws:region` (string)
-   The AWS region to deploy resources into.
-   Default: `us-east-1`
+Teste rápido após a implantação:
 
- View or update configuration with:
- ```bash
- pulumi config get aws:region
- pulumi config set aws:region us-west-2
- ```
+```bash
+curl "$(pulumi stack output url)/health"
+curl "$(pulumi stack output url)/teachers"
+```
 
- ## Outputs
+Saídas: `url` (endereço HTTPS público), `api_url` (endpoint direto do API
+Gateway), `cdn_domain`, `tables` e `functions`.
 
- Once deployed, the stack exports:
+## Observações
 
- - `bucket_name` — the ID of the created S3 bucket.
-
- Retrieve outputs with:
- ```bash
- pulumi stack output bucket_name
- ```
-
- ## Next Steps
-
- - Customize `__main__.py` to add or configure additional resources.
- - Explore the Pulumi AWS SDK: https://www.pulumi.com/registry/packages/aws/
- - Break your infrastructure into modules for better organization.
- - Integrate into CI/CD pipelines for automated deployments.
-
- ## Help and Community
-
- If you have questions or need assistance:
- - Pulumi Documentation: https://www.pulumi.com/docs/
- - Community Slack: https://slack.pulumi.com/
- - GitHub Issues: https://github.com/pulumi/pulumi/issues
-
- Contributions and feedback are always welcome!
+- A CDN usa as políticas gerenciadas `Managed-CachingDisabled` e
+  `Managed-AllViewerExceptHostHeader`: as respostas da API são dinâmicas e
+  dependem de cabeçalhos como `Authorization`.
+- O CloudFront só aceita certificados ACM de `us-east-1`; por isso o
+  certificado usa um provider dedicado nessa região, enquanto o restante fica
+  em `sa-east-1`.
+- As rotas ainda não exigem autenticação; isso entra com Cognito na sprint de
+  autenticação. Não use dados reais até lá.

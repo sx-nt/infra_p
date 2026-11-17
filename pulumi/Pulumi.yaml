@@ -1,5 +1,5 @@
 name: Infra
-description: Projeto AWS Python
+description: Infraestrutura AWS do Classly (DynamoDB, Lambda, API Gateway, CloudFront, ACM e Route 53)
 runtime:
   name: python
   options:

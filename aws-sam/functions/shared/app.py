@@ -3,7 +3,7 @@
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import boto3
@@ -317,7 +317,7 @@ def handler(event, context):
             schedule = {
                 "scheduleId": str(uuid.uuid4()), "term": data["term"],
                 "status": "DRAFT", "version": 1,
-                "createdAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "allocations": allocations,
             }
             _db().Table(TABLES["schedules"]).put_item(Item=schedule)

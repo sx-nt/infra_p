@@ -50,16 +50,43 @@ Esta documentação cobre:
 - notificações e auditoria;
 - requisitos de qualidade e infraestrutura.
 
-## Infraestrutura da Sprint 3
+## Infraestrutura
 
-O backend inicial está em `aws-sam/`: AWS SAM expõe a API REST e provisiona
-tabelas DynamoDB para professores, disciplinas, turmas, habilitações,
-disponibilidades e grades, com handlers Lambda separados por domínio. O `docker compose` do diretório inicia DynamoDB
-Local e cria o mesmo modelo para desenvolvimento.
+| Diretório | Uso |
+| --- | --- |
+| [`aws-sam/`](aws-sam/README.md) | Desenvolvimento local: SAM + DynamoDB Local com as mesmas funções Lambda. |
+| [`pulumi/`](pulumi/README.md) | Nuvem (stacks `dev` e `prod`): DynamoDB, Lambda, API Gateway, CloudFront, certificado ACM e registros Route 53. |
+| `docker/compose/` | Experimento introdutório da disciplina com Docker Compose. |
 
-O contrato implementado e os passos para executar a API localmente estão em
-[docs/api.md](docs/api.md) e [aws-sam/README.md](aws-sam/README.md). Login
-federado, chamada direta ao Google Calendar, algoritmo automático de geração,
-aprovação/publicação com controle de acesso e notificações dependem de
-integrações e decisões ainda não configuradas no repositório; a API atual
-aceita restrições fornecidas pelo cliente e valida/salva rascunhos de grade.
+Em ambos os stacks a API é publicada atrás do CloudFront com HTTPS
+obrigatório (`navegador → CloudFront → API Gateway → Lambda → DynamoDB`). Em
+`prod`, o certificado ACM é validado por DNS e o domínio aponta para a CDN por
+registros alias na zona compartilhada do Route 53.
+
+O contrato da API está em [docs/api.md](docs/api.md). Login federado, chamada
+direta ao Google Calendar, algoritmo automático de geração,
+aprovação/publicação com controle de acesso e notificações ficam para as
+próximas sprints; a API atual aceita restrições fornecidas pelo cliente e
+valida/salva rascunhos de grade.
+
+## Preparação do ambiente
+
+No IAM da conta AWS da equipe:
+
+1. Criar um grupo e um usuário sem acesso ao console, associado ao grupo.
+1. Associar ao grupo a política [`iam-policy.json`](iam-policy.json), que
+   permite criar os papéis das funções Lambda e assumir o papel
+   `route53-rr-role` da zona compartilhada.
+1. Para o ambiente de **desenvolvimento**, associar também as políticas
+   gerenciadas `AmazonAPIGatewayAdministrator`, `AmazonDynamoDBFullAccess_v2`,
+   `AWSLambda_FullAccess`, `CloudFrontFullAccess`,
+   `AWSCertificateManagerFullAccess` e `CloudWatchLogsFullAccess`.
+1. Criar uma chave de acesso para o usuário.
+
+Variáveis de ambiente (ou secrets do Codespaces): `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION=sa-east-1` e
+`PULUMI_ACCESS_TOKEN`.
+
+```bash
+make install
+```

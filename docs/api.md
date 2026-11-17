@@ -1,8 +1,22 @@
-# API e modelo de dados — Sprint 3
+# API e modelo de dados
 
 A API REST é exposta pelo API Gateway e encaminhada a funções Lambda separadas
-por domínio, conforme `aws-sam/template.yaml` e `aws-sam/functions/`. Em desenvolvimento, as mesmas funções usam o
-DynamoDB Local definido em `aws-sam/docker-compose.yaml`.
+por domínio (`aws-sam/functions/`). Em desenvolvimento local, as funções rodam
+com SAM (`aws-sam/template.yaml`) e DynamoDB Local
+(`aws-sam/docker-compose.yaml`). Na nuvem, o Pulumi (`pulumi/__main__.py`)
+publica as mesmas funções em um HTTP API atrás do CloudFront.
+
+## Endereços
+
+| Ambiente | URL base |
+| --- | --- |
+| Local (SAM) | `http://127.0.0.1:3000` |
+| dev | `https://<distribuição>.cloudfront.net` (`pulumi stack output url -s dev`) |
+| prod | `https://<classly:domain>` (`pulumi stack output url -s prod`) |
+
+Na nuvem o CloudFront redireciona HTTP para HTTPS, não guarda respostas em
+cache e repassa cabeçalhos, query string e corpo ao API Gateway. As rotas não
+têm prefixo de estágio (estágio `$default`).
 
 ## Modelo DynamoDB
 
@@ -14,6 +28,10 @@ DynamoDB Local definido em `aws-sam/docker-compose.yaml`.
 | `QualificationsTable` | `teacherId` | `subjectId` | Habilitação do professor para lecionar a disciplina. |
 | `AvailabilityTable` | `teacherId` | `availabilityId` | Intervalos semanais disponíveis ou bloqueados. `origin` pode ser `MANUAL` ou `GOOGLE`. |
 | `SchedulesTable` | `scheduleId` | — | Rascunho versionado com alocações e estado. |
+
+Os nomes acima são os usados localmente; na nuvem o Pulumi cria
+`classly-<domínio>-<sufixo>` e informa o nome às funções pelas variáveis
+`TEACHERS_TABLE`, `SUBJECTS_TABLE` etc.
 
 As tabelas usam cobrança sob demanda. Horários são semanais, em dias `MON`,
 `TUE`, `WED`, `THU`, `FRI`, `SAT`, `SUN`, e no formato de 24 horas `HH:MM`.

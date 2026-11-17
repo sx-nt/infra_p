@@ -35,4 +35,4 @@ shell:
 	@echo 'export PATH="$$HOME/.local/bin:$$HOME/.pulumi/bin:$$PATH"'
 
 check:
-	python3 -m py_compile pulumi/__main__.py
+	python3 -m py_compile pulumi/__main__.py aws-sam/functions/*/*.py

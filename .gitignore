@@ -5,5 +5,11 @@ aws/
 
 # AWS SAM CLI
 .aws-sam-cli
-aws-sam-cli-linux-x86_64.zip
+aws-sam-cli-linux-x86*
 sam-installation/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
