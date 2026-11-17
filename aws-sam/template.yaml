@@ -16,6 +16,11 @@ Globals:
         QUALIFICATIONS_TABLE: !Ref QualificationsTable
         AVAILABILITY_TABLE: !Ref AvailabilityTable
         SCHEDULES_TABLE: !Ref SchedulesTable
+        USERS_TABLE: !Ref UsersTable
+        LOCAL_DEV_USER: ''
+        ADMIN_EMAILS: ''
+        SENDER_EMAIL: ''
+        APP_URL: ''
 
 Resources:
   ClasslyApi:
@@ -35,6 +40,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TeachersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
       Events:
         ListTeachers:
           Type: Api
@@ -63,6 +70,10 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref SubjectsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TeachersTable
       Events:
         ListSubjects:
           Type: Api
@@ -93,6 +104,10 @@ Resources:
             TableName: !Ref ClassesTable
         - DynamoDBCrudPolicy:
             TableName: !Ref SubjectsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TeachersTable
       Events:
         ListClasses:
           Type: Api
@@ -125,7 +140,15 @@ Resources:
             TableName: !Ref TeachersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref SubjectsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
       Events:
+        ListQualifications:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ClasslyApi
+            Path: /qualifications
+            Method: get
         TeacherQualification:
           Type: Api
           Properties:
@@ -143,6 +166,8 @@ Resources:
             TableName: !Ref AvailabilityTable
         - DynamoDBCrudPolicy:
             TableName: !Ref TeachersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
       Events:
         TeacherAvailability:
           Type: Api
@@ -169,6 +194,12 @@ Resources:
             TableName: !Ref QualificationsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref AvailabilityTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: '*'
       Events:
         CreateSchedule:
           Type: Api
@@ -182,12 +213,54 @@ Resources:
             RestApiId: !Ref ClasslyApi
             Path: /schedules/validate
             Method: post
+        ListSchedules:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ClasslyApi
+            Path: /schedules
+            Method: get
         ScheduleById:
           Type: Api
           Properties:
             RestApiId: !Ref ClasslyApi
             Path: /schedules/{scheduleId}
+            Method: any
+        PublishSchedule:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ClasslyApi
+            Path: /schedules/{scheduleId}/publish
+            Method: post
+
+  UsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/
+      Handler: users.handler.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TeachersTable
+      Events:
+        Me:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ClasslyApi
+            Path: /me
             Method: get
+        ListUsers:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ClasslyApi
+            Path: /users
+            Method: get
+        UserRole:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ClasslyApi
+            Path: /users/{userId}/role
+            Method: put
 
   HealthFunction:
     Type: AWS::Serverless::Function
@@ -280,6 +353,18 @@ Resources:
           AttributeType: S
       KeySchema:
         - AttributeName: scheduleId
+          KeyType: HASH
+
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: UsersTable
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
           KeyType: HASH
 
 Outputs:

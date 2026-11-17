@@ -57,6 +57,7 @@ services:
         create_table QualificationsTable teacherId subjectId
         create_table AvailabilityTable teacherId availabilityId
         create_table SchedulesTable scheduleId
+        create_table UsersTable userId
         echo "ALL TABLES READY"
     networks: [sam-local]
 

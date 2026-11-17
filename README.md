@@ -54,20 +54,35 @@ Esta documentação cobre:
 
 | Diretório | Uso |
 | --- | --- |
+| [`web/`](web) | Frontend React (Vite): telas da coordenação e do professor, login pelo Cognito. |
 | [`aws-sam/`](aws-sam/README.md) | Desenvolvimento local: SAM + DynamoDB Local com as mesmas funções Lambda. |
-| [`pulumi/`](pulumi/README.md) | Nuvem (stacks `dev` e `prod`): DynamoDB, Lambda, API Gateway, CloudFront, certificado ACM e registros Route 53. |
+| [`pulumi/`](pulumi/README.md) | Nuvem (stacks `dev` e `prod`): DynamoDB, Lambda, API Gateway, Cognito, S3, CloudFront, SES, certificado ACM e registros Route 53. |
 | `docker/compose/` | Experimento introdutório da disciplina com Docker Compose. |
 
-Em ambos os stacks a API é publicada atrás do CloudFront com HTTPS
-obrigatório (`navegador → CloudFront → API Gateway → Lambda → DynamoDB`). Em
-`prod`, o certificado ACM é validado por DNS e o domínio aponta para a CDN por
-registros alias na zona compartilhada do Route 53.
+Em ambos os stacks o CloudFront é o único ponto de entrada, com HTTPS
+obrigatório: `/` entrega o frontend guardado em um bucket S3 privado e
+`/api/*` encaminha para o API Gateway → Lambda → DynamoDB. Em `prod`, o
+certificado ACM é validado por DNS e o domínio aponta para a CDN por registros
+alias na zona compartilhada do Route 53.
 
-O contrato da API está em [docs/api.md](docs/api.md). Login federado, chamada
-direta ao Google Calendar, algoritmo automático de geração,
-aprovação/publicação com controle de acesso e notificações ficam para as
-próximas sprints; a API atual aceita restrições fornecidas pelo cliente e
-valida/salva rascunhos de grade.
+### Acesso e perfis
+
+O login é feito pelo Amazon Cognito: cadastro por e-mail com código de
+verificação enviado por e-mail, recuperação de senha e, opcionalmente, conta
+Google. Toda rota da API, exceto `/health`, exige o token do Cognito. O perfil
+de cada usuário fica na tabela de usuários do DynamoDB:
+
+| Perfil | Como é atribuído | O que pode fazer |
+| --- | --- | --- |
+| Coordenação | E-mail em `classly:adminEmails` ou promovido por outro coordenador | Cadastros, habilitações, disponibilidade de todos, montar, validar e publicar grades, gerenciar usuários. |
+| Professor | Conta criada com o e-mail de um professor cadastrado | Informar a própria disponibilidade e consultar grades publicadas. |
+| Aguardando liberação | Demais contas | Nenhum acesso aos dados até a coordenação liberar. |
+
+Ao publicar uma grade, cada professor recebe por e-mail (Amazon SES) os
+próprios horários. O contrato da API está em [docs/api.md](docs/api.md).
+
+Integração direta com o Google Calendar, geração automática da grade e
+trilha de auditoria ficam para as próximas sprints.
 
 ## Preparação do ambiente
 
@@ -80,7 +95,8 @@ No IAM da conta AWS da equipe:
 1. Para o ambiente de **desenvolvimento**, associar também as políticas
    gerenciadas `AmazonAPIGatewayAdministrator`, `AmazonDynamoDBFullAccess_v2`,
    `AWSLambda_FullAccess`, `CloudFrontFullAccess`,
-   `AWSCertificateManagerFullAccess` e `CloudWatchLogsFullAccess`.
+   `AWSCertificateManagerFullAccess`, `CloudWatchLogsFullAccess`,
+   `AmazonCognitoPowerUser`, `AmazonS3FullAccess` e `AmazonSESFullAccess`.
 1. Criar uma chave de acesso para o usuário.
 
 Variáveis de ambiente (ou secrets do Codespaces): `AWS_ACCESS_KEY_ID`,
