@@ -1,2 +1,4 @@
 config:
   aws:region: sa-east-1
+  classly:adminEmails: isadora.se02@aluno.ifsc.edu.br
+  classly:senderEmail: sant.ssa13@aluno.ifsc.edu.br
