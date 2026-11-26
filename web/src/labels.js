@@ -28,3 +28,10 @@ export function byId(items, key) {
 export function formatDate(value) {
   return value ? new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'
 }
+
+// Duração em horas entre dois horários HH:MM (zero se o fim não for posterior).
+export function hours(start, end) {
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  return Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60)
+}

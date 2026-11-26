@@ -2,15 +2,9 @@ import { useState } from 'react'
 import { api } from '../api.js'
 import { Empty, ErrorList, Field, Loading, Message } from '../components.jsx'
 import { useResources } from '../hooks.js'
-import { DAYS, STATUS_NAME, byId, formatDate } from '../labels.js'
+import { DAYS, STATUS_NAME, byId, formatDate, hours } from '../labels.js'
 
 const newAllocation = () => ({ classId: '', teacherId: '', day: 'MON', start: '08:00', end: '10:00' })
-
-function hours(start, end) {
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  return Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60)
-}
 
 // Grade semanal: uma coluna por dia com as aulas em ordem de horário.
 function WeekGrid({ schedule, lookups, highlightTeacherId, onlyMine }) {

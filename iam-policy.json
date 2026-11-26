@@ -24,8 +24,28 @@
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::*:role/*",
       "Condition": {
-        "StringEquals": {"iam:PassedToService": "lambda.amazonaws.com"}
+        "StringEquals": {
+          "iam:PassedToService": "lambda.amazonaws.com"
+        }
       }
+    },
+    {
+      "Sid": "LambdaLogGroups",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:DeleteRetentionPolicy",
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:ListTagsLogGroup",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:TagLogGroup",
+        "logs:UntagLogGroup"
+      ],
+      "Resource": "*"
     },
     {
       "Sid": "SharedRoute53Zone",

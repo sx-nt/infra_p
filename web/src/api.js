@@ -27,8 +27,10 @@ export async function api(path, { method = 'GET', body } = {}) {
     data = null
   }
   if (!response.ok) {
-    const fallback = response.status === 401 ? 'Sua sessão expirou. Entre novamente.' : `Erro ${response.status}`
-    throw new ApiError(response.status, data?.message || fallback, data?.errors)
+    // 401 vem do autorizador do API Gateway (em inglês): mensagem própria.
+    const message =
+      response.status === 401 ? 'Sua sessão expirou. Entre novamente.' : data?.message || `Erro ${response.status}`
+    throw new ApiError(response.status, message, data?.errors)
   }
   return data
 }

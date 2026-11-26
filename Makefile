@@ -1,4 +1,4 @@
-.PHONY: all install aws_cli aws_sam_cli pulumi uv shell check
+.PHONY: all install aws_cli aws_sam_cli pulumi uv shell check test test-backend test-integration test-web test-infra
 
 all: install
 
@@ -36,3 +36,25 @@ shell:
 
 check:
 	python3 -m py_compile pulumi/__main__.py aws-sam/functions/*/*.py
+
+## ---- testes (mesmos passos do CI) ----------------------------------------
+# Porta do DynamoDB Local usado pelos testes de integração.
+DDB_PORT ?= 8001
+PYTEST   := uv run --no-project --with-requirements requirements-test.txt pytest
+
+test: test-backend test-integration test-web test-infra
+
+test-backend:
+	cd aws-sam && $(PYTEST) tests/unit
+
+test-integration:
+	docker run -d --rm --name classly-test-dynamodb -p 127.0.0.1:$(DDB_PORT):8000 amazon/dynamodb-local
+	sleep 3
+	cd aws-sam && DYNAMODB_ENDPOINT=http://127.0.0.1:$(DDB_PORT) $(PYTEST) tests/integration; \
+		status=$$?; docker stop classly-test-dynamodb >/dev/null; exit $$status
+
+test-web:
+	cd web && npm ci && npm test && npm run build
+
+test-infra:
+	cd pulumi && uv run pytest tests

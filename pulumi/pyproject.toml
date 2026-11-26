@@ -6,3 +6,8 @@ dependencies = [
     "pulumi>=3.0.0,<4.0.0",
     "pulumi-aws>=7.0.0,<8.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]

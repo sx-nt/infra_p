@@ -84,19 +84,119 @@ próprios horários. O contrato da API está em [docs/api.md](docs/api.md).
 Integração direta com o Google Calendar, geração automática da grade e
 trilha de auditoria ficam para as próximas sprints.
 
+## Como executar
+
+Tudo é implantado por um único `pulumi up`: o programa compila o frontend,
+empacota as funções e cria a infraestrutura completa. Leva de 5 a 10 minutos
+na primeira vez (a maior parte é o CloudFront).
+
+### 1. Pré-requisitos
+
+- Conta AWS com um usuário IAM preparado conforme
+  [Preparação do ambiente](#preparação-do-ambiente) e suas chaves exportadas
+  (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION=sa-east-1`).
+- Conta no Pulumi (`pulumi login` ou `PULUMI_ACCESS_TOKEN`).
+- Ferramentas: `make install` instala AWS CLI, SAM CLI, Pulumi e uv. Também
+  são necessários Node.js 22 e, para os testes de integração, Docker.
+
+### 2. Implantar
+
+```bash
+git clone https://github.com/sx-nt/infra_p.git
+cd infra_p/pulumi
+pulumi stack init dev
+pulumi config set classly:adminEmails "seu-email@exemplo.com"
+pulumi config rm classly:senderEmail
+pulumi up
+```
+
+- `pulumi stack init dev` cria o stack na organização Pulumi de quem executa,
+  aproveitando as configurações de [`Pulumi.dev.yaml`](pulumi/Pulumi.dev.yaml).
+- `classly:adminEmails` define quem entra como coordenação: use o seu e-mail
+  para conseguir cadastrar dados.
+- `classly:senderEmail` é o remetente das notificações. O valor versionado é
+  da equipe; remova-o (como acima) ou troque pelo seu e-mail, que receberá um
+  link de confirmação da AWS (de novo a cada vez que o stack for recriado do
+  zero).
+
+Ao final, `pulumi up` mostra a `url` do sistema (ex.:
+`https://d1234abcd.cloudfront.net`).
+
+### 3. Usar
+
+1. Abra a `url`, clique em **Entrar com e-mail** e em **Criar uma conta** com o
+   e-mail informado em `classly:adminEmails`.
+2. Digite o código de verificação recebido por e-mail. Você entra como
+   **Coordenação**.
+3. Cadastre uma disciplina, um professor (com um e-mail que você acesse), uma
+   turma e a habilitação do professor na disciplina.
+4. Em **Grades → Nova grade**, monte as aulas até a carga horária fechar,
+   **Valide**, **Salve o rascunho** e **Publique**.
+5. Em uma janela anônima, crie a conta com o e-mail do professor: ele entra
+   direto como **Professor** e vê a grade publicada e a própria disponibilidade.
+
+Com `classly:senderEmail` configurado e confirmado, o professor recebe os
+horários por e-mail. Contas AWS novas ficam no *sandbox* do SES, que só entrega
+para endereços verificados em **SES → Verified identities**.
+
+### 4. Testes
+
+```bash
+make test
+```
+
+Executa os mesmos testes do CI:
+
+| Alvo | O que testa |
+| --- | --- |
+| `make test-backend` | Testes unitários das regras e da autorização das Lambdas, com DynamoDB e SES simulados (moto). |
+| `make test-integration` | Fluxo completo de um período letivo contra o DynamoDB Local (Docker), roteando cada requisição para a Lambda definida no `template.yaml`. |
+| `make test-web` | Testes do frontend (login PKCE, tokens, cliente da API) e build. |
+| `make test-infra` | Programa Pulumi com mocks: rotas protegidas, bucket privado, HTTPS, domínio, certificado e DKIM no prod. |
+
+Depois de uma implantação, o teste de fumaça confere o ambiente publicado:
+
+```bash
+cd pulumi
+CLASSLY_URL=$(pulumi stack output url) uv run pytest tests/deployed
+```
+
+### 5. CI/CD (GitHub Actions)
+
+| Workflow | Quando roda | O que faz |
+| --- | --- | --- |
+| [`ci.yml`](.github/workflows/ci.yml) | Pull requests e pushes fora da `main` | Testes do backend (unitários e integração com DynamoDB Local), do frontend e da infraestrutura. |
+| [`cd.yml`](.github/workflows/cd.yml) | Push na `main` → `dev`; tag `v*` → `prod`; ou manual | Roda o CI, executa `pulumi up` no stack e o teste de fumaça na URL publicada. |
+
+Para o CD funcionar, cadastre em **Settings → Secrets and variables →
+Actions** do repositório os secrets `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY` e `PULUMI_ACCESS_TOKEN`. Produção exige também
+`classly:domain` configurado no stack `prod`.
+
+### 6. Remover
+
+```bash
+pulumi destroy
+```
+
+Remove todos os recursos do stack (os serviços usados cobram por uso; parado,
+o custo é praticamente zero).
+
 ## Preparação do ambiente
 
 No IAM da conta AWS da equipe:
 
 1. Criar um grupo e um usuário sem acesso ao console, associado ao grupo.
-1. Associar ao grupo a política [`iam-policy.json`](iam-policy.json), que
-   permite criar os papéis das funções Lambda e assumir o papel
-   `route53-rr-role` da zona compartilhada.
-1. Para o ambiente de **desenvolvimento**, associar também as políticas
-   gerenciadas `AmazonAPIGatewayAdministrator`, `AmazonDynamoDBFullAccess_v2`,
-   `AWSLambda_FullAccess`, `CloudFrontFullAccess`,
-   `AWSCertificateManagerFullAccess`, `CloudWatchLogsFullAccess`,
+1. Criar a política [`iam-policy.json`](iam-policy.json) (IAM → Policies →
+   Create policy → JSON) e associá-la ao grupo. Ela permite criar os papéis e
+   os grupos de log das funções Lambda e assumir o papel `route53-rr-role` da
+   zona compartilhada.
+1. Associar também as políticas gerenciadas `AmazonAPIGatewayAdministrator`,
+   `AmazonDynamoDBFullAccess_v2`, `AWSLambda_FullAccess`,
+   `CloudFrontFullAccess`, `AWSCertificateManagerFullAccess`,
    `AmazonCognitoPowerUser`, `AmazonS3FullAccess` e `AmazonSESFullAccess`.
+   Somadas à política do passo anterior são 10, o limite da AWS por usuário
+   ou grupo.
 1. Criar uma chave de acesso para o usuário.
 
 Variáveis de ambiente (ou secrets do Codespaces): `AWS_ACCESS_KEY_ID`,

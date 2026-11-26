@@ -1,0 +1,5 @@
+# Dependências dos testes do backend (as Lambdas usam o boto3 do runtime).
+boto3>=1.40
+moto[dynamodb,ses]>=5.1
+pytest>=8.3
+pyyaml>=6.0

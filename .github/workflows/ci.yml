@@ -1,0 +1,70 @@
+# Integração contínua: testes unitários e de integração de todas as partes.
+# Roda em pull requests e é reaproveitado pelo CD antes de cada implantação.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (unitários + integração)
+    runs-on: ubuntu-latest
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local
+        ports: ["8000:8000"]
+    defaults:
+      run:
+        working-directory: aws-sam
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Testes unitários (DynamoDB e SES simulados)
+        run: uv run --no-project --with-requirements requirements-test.txt pytest tests/unit
+      - name: Testes de integração (DynamoDB Local)
+        run: uv run --no-project --with-requirements requirements-test.txt pytest tests/integration
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+
+  frontend:
+    name: Frontend (testes + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  infra:
+    name: Infraestrutura (Pulumi com mocks)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pulumi
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Testes do programa Pulumi
+        run: uv run pytest tests
