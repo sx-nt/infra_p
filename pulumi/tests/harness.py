@@ -4,6 +4,7 @@ Uso: python tests/harness.py <stack>. Roda em processo separado porque o
 runtime do Pulumi guarda estado global por execução.
 """
 
+import asyncio
 import json
 import runpy
 import sys
@@ -58,6 +59,8 @@ if STACK == "prod":
         "classly:route53ExternalId": "external-id",
     })
 
+# Python 3.14+ não cria event loop implícito; o `pulumi up` real cria o dele.
+asyncio.set_event_loop(asyncio.new_event_loop())
 pulumi.runtime.set_mocks(Mocks(), project="Infra", stack=STACK, preview=False)
 pulumi.runtime.set_all_config(config)
 runpy.run_path(str(PROGRAM_DIR / "__main__.py"), run_name="__main__")
@@ -66,6 +69,6 @@ runpy.run_path(str(PROGRAM_DIR / "__main__.py"), run_name="__main__")
 previous = -1
 while previous != len(resources):
     previous = len(resources)
-    pulumi.runtime.sync_await._sync_await(__import__("asyncio").sleep(1))
+    pulumi.runtime.sync_await._sync_await(asyncio.sleep(1))
 
 print("RESOURCES" + json.dumps(resources, default=str))

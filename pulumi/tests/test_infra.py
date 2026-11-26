@@ -18,8 +18,10 @@ SAM_TEMPLATE = HERE.parent.parent / "aws-sam" / "template.yaml"
 def resources(stack):
     result = subprocess.run(
         [sys.executable, str(HERE / "harness.py"), stack],
-        capture_output=True, text=True, check=True, cwd=HERE.parent,
+        capture_output=True, text=True, cwd=HERE.parent,
     )
+    if result.returncode != 0:
+        pytest.fail(f"O programa Pulumi falhou no stack {stack}:\n{result.stderr[-3000:]}")
     payload = result.stdout[result.stdout.index("RESOURCES") + len("RESOURCES"):]
     return json.loads(payload)
 
