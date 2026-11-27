@@ -18,7 +18,7 @@ SAM + DynamoDB Local; o frontend é o build de [`web/`](../web).
 | CloudFront: site em `/`, API em `/api/*` (sem cache), HTTPS obrigatório | domínio `*.cloudfront.net` | domínio próprio |
 | SES: e-mail aos professores quando uma grade é publicada | se `classly:senderEmail` | domínio com DKIM |
 | ACM: certificado em `us-east-1` validado por DNS | — | ✓ |
-| Route 53: validação do certificado, DKIM e alias `A`/`AAAA` para a CDN | — | ✓ (zona compartilhada) |
+| Route 53: zona própria do subdomínio (protegida), validação do certificado, DKIM e alias `A`/`AAAA` para a CDN | — | ✓ |
 
 O tráfego segue `navegador → CloudFront (HTTPS) → S3 (site) | API Gateway → Lambda → DynamoDB`.
 O login acontece no domínio do Cognito (`login_url`), que devolve o navegador
@@ -33,18 +33,42 @@ em `Authorization: Bearer` e o API Gateway o valida antes de chamar a Lambda.
 | `classly:adminEmails` | dev, prod | E-mails (separados por vírgula) que entram como coordenação. |
 | `classly:senderEmail` | dev (opcional) | Remetente das notificações; a AWS envia um link de confirmação para ele. |
 | `classly:googleClientId` / `classly:googleClientSecret` | dev, prod (opcional) | Credenciais OAuth do Google para o botão “Entrar com Google” (o segredo com `--secret`). |
-| `classly:domain` | prod | Domínio público do sistema. |
-| `classly:zoneId` | prod | Hosted zone do domínio no Route 53. |
-| `classly:route53RoleArn` | prod | Papel assumido para gravar registros na zona, que pertence a outra conta. |
-| `classly:route53ExternalId` | prod | External ID exigido pelo papel acima. |
+| `classly:domain` | prod | Subdomínio público do sistema (`classly.negoci.online`). |
 
 Antes do primeiro `up` de cada stack:
 
 ```bash
 pulumi config set classly:adminEmails "pessoa1@exemplo.com,pessoa2@exemplo.com" -s dev
 pulumi config set classly:adminEmails "pessoa1@exemplo.com,pessoa2@exemplo.com" -s prod
-pulumi config set classly:domain <dominio> -s prod
 ```
+
+O `classly:domain` do prod já está em `Pulumi.prod.yaml`.
+
+### Primeira implantação do prod (delegação do subdomínio)
+
+O subdomínio `classly.negoci.online` fica em uma zona Route 53 da conta da
+equipe; o professor, dono de `negoci.online`, delega essa zona apontando para
+os servidores de nome (NS) dela. Por isso o prod sobe em duas etapas:
+
+1. Criar só a zona e obter os NS:
+   ```bash
+   pulumi up -s prod --target 'urn:pulumi:prod::Infra::aws:route53/zone:Zone::classly-zone'
+   pulumi stack output name_servers -s prod
+   ```
+2. Enviar os quatro NS e o nome `classly.negoci.online` ao professor e
+   aguardar a confirmação da delegação. Para conferir:
+   ```bash
+   dig +short NS classly.negoci.online
+   ```
+3. Implantar o restante (o certificado só é validado depois da delegação):
+   ```bash
+   pulumi up -s prod
+   ```
+
+A zona tem `protect=True`: se ela fosse recriada, os NS mudariam e a
+delegação deixaria de funcionar. Para remover o prod mantendo a zona, use
+`pulumi destroy -s prod --exclude-protected`. Uma zona Route 53 custa
+US$ 0,50 por mês.
 
 Opcionais:
 

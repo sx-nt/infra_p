@@ -153,19 +153,26 @@ def test_dev_has_no_domain_resources():
 
 
 def test_prod_publishes_domain_with_certificate_and_dkim():
-    records = {r["name"]: r for r in of_type("prod", "aws:route53/record:Record")}
+    [zone] = of_type("prod", "aws:route53/zone:Zone")
+    assert zone["inputs"]["name"] == "classly.test"
+
+    records = {r["name"]: r["inputs"] for r in of_type("prod", "aws:route53/record:Record")}
     assert set(records) == {
         "classly-cert-validation", "classly-dkim-0", "classly-dkim-1", "classly-dkim-2",
         "classly-alias-a", "classly-alias-aaaa",
     }
-    shared_zone = [r for r in resources("prod") if r["name"] == "route53-shared-zone"][0]
-    assert all("pulumi:providers:aws::route53-shared-zone::" in r["provider"] for r in records.values())
-    # Entradas de provider chegam serializadas em JSON.
-    assume_roles = json.loads(shared_zone["inputs"]["assumeRoles"])
-    assert assume_roles[0]["externalId"] == "external-id"
+    assert all(r["zoneId"] == "ZCLASSLY" for r in records.values())
+    assert records["classly-dkim-0"]["name"] == "a1._domainkey.classly.test"
 
     certificate = [r for r in resources("prod") if r["type"] == "aws:acm/certificate:Certificate"][0]
     assert "pulumi:providers:aws::us-east-1::" in certificate["provider"]
     cdn = one("prod", "aws:cloudfront/distribution:Distribution")
     assert cdn["aliases"] == ["classly.test"]
     assert cdn["viewerCertificate"]["minimumProtocolVersion"] == "TLSv1.2_2021"
+
+
+def test_prod_zone_is_protected_against_replacement():
+    """Recriar a zona trocaria os NS e quebraria a delegação feita pelo professor."""
+    source = (HERE.parent / "__main__.py").read_text()
+    zone_block = source[source.index('aws.route53.Zone('):source.index("def dns_record")]
+    assert "protect=True" in zone_block

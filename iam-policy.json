@@ -48,10 +48,22 @@
       "Resource": "*"
     },
     {
-      "Sid": "SharedRoute53Zone",
+      "Sid": "ClasslyHostedZone",
       "Effect": "Allow",
-      "Action": "sts:AssumeRole",
-      "Resource": "arn:aws:iam::789223369510:role/route53-rr-role"
+      "Action": [
+        "route53:CreateHostedZone",
+        "route53:DeleteHostedZone",
+        "route53:GetHostedZone",
+        "route53:ListHostedZones",
+        "route53:ListHostedZonesByName",
+        "route53:UpdateHostedZoneComment",
+        "route53:ChangeResourceRecordSets",
+        "route53:ListResourceRecordSets",
+        "route53:GetChange",
+        "route53:ListTagsForResource",
+        "route53:ChangeTagsForResource"
+      ],
+      "Resource": "*"
     }
   ]
 }

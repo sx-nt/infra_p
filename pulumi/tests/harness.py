@@ -39,11 +39,15 @@ class Mocks(pulumi.runtime.Mocks):
             },
             "aws:sesv2/emailIdentity:EmailIdentity": {"dkimSigningAttributes": {"tokens": ["a1", "b2", "c3"]}},
             "aws:cognito/userPool:UserPool": {"endpoint": "cognito-idp.sa-east-1.amazonaws.com/sa-east-1_TEST"},
+            "aws:route53/zone:Zone": {"zoneId": "ZCLASSLY", "nameServers": ["ns-1.awsdns-01.org"]},
         }.get(args.typ, {})
         outputs.update(fake)
         outputs.setdefault("arn", f"arn:aws:mock:::{args.name}")
         outputs.setdefault("name", args.name)
-        resources.append({"type": args.typ, "name": args.name, "provider": args.provider, "inputs": args.inputs})
+        resources.append({
+            "type": args.typ, "name": args.name, "provider": args.provider,
+            "inputs": args.inputs, "protect": getattr(args, "protect", None),
+        })
         return [f"{args.name}-id", outputs]
 
     def call(self, args):
@@ -52,12 +56,7 @@ class Mocks(pulumi.runtime.Mocks):
 
 config = {"aws:region": "sa-east-1", "classly:adminEmails": "coordenacao@classly.test"}
 if STACK == "prod":
-    config.update({
-        "classly:domain": "classly.test",
-        "classly:zoneId": "ZTEST",
-        "classly:route53RoleArn": "arn:aws:iam::210987654321:role/route53-rr-role",
-        "classly:route53ExternalId": "external-id",
-    })
+    config["classly:domain"] = "classly.test"
 
 # Python 3.14+ não cria event loop implícito; o `pulumi up` real cria o dele.
 asyncio.set_event_loop(asyncio.new_event_loop())

@@ -63,7 +63,8 @@ Em ambos os stacks o CloudFront é o único ponto de entrada, com HTTPS
 obrigatório: `/` entrega o frontend guardado em um bucket S3 privado e
 `/api/*` encaminha para o API Gateway → Lambda → DynamoDB. Em `prod`, o
 certificado ACM é validado por DNS e o domínio aponta para a CDN por registros
-alias na zona compartilhada do Route 53.
+alias na zona Route 53 do subdomínio `classly.negoci.online`, delegada pelo
+professor (ver [pulumi/README.md](pulumi/README.md#primeira-implantação-do-prod-delegação-do-subdomínio)).
 
 ### Acesso e perfis
 
@@ -170,8 +171,9 @@ CLASSLY_URL=$(pulumi stack output url) uv run pytest tests/deployed
 
 Para o CD funcionar, cadastre em **Settings → Secrets and variables →
 Actions** do repositório os secrets `AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY` e `PULUMI_ACCESS_TOKEN`. Produção exige também
-`classly:domain` configurado no stack `prod`.
+`AWS_SECRET_ACCESS_KEY` e `PULUMI_ACCESS_TOKEN`. Antes da primeira tag de
+produção, a zona do subdomínio precisa ter sido criada e delegada (ver
+[pulumi/README.md](pulumi/README.md#primeira-implantação-do-prod-delegação-do-subdomínio)).
 
 ### 6. Remover
 
@@ -189,8 +191,8 @@ No IAM da conta AWS da equipe:
 1. Criar um grupo e um usuário sem acesso ao console, associado ao grupo.
 1. Criar a política [`iam-policy.json`](iam-policy.json) (IAM → Policies →
    Create policy → JSON) e associá-la ao grupo. Ela permite criar os papéis e
-   os grupos de log das funções Lambda e assumir o papel `route53-rr-role` da
-   zona compartilhada.
+   os grupos de log das funções Lambda e gerenciar a zona Route 53 do
+   subdomínio de produção.
 1. Associar também as políticas gerenciadas `AmazonAPIGatewayAdministrator`,
    `AmazonDynamoDBFullAccess_v2`, `AWSLambda_FullAccess`,
    `CloudFrontFullAccess`, `AWSCertificateManagerFullAccess`,

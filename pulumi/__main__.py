@@ -2,8 +2,8 @@
 
 dev: DynamoDB, Lambdas, API Gateway, Cognito, frontend no S3 e CloudFront com o
 domínio padrão da CDN.
-prod: o mesmo, publicado no domínio próprio com certificado ACM, e-mail SES do
-domínio e registros Route 53 criados na zona compartilhada (via assume role).
+prod: o mesmo, publicado no subdomínio próprio com certificado ACM, e-mail SES
+do domínio e registros em uma zona Route 53 da equipe, delegada pelo professor.
 """
 
 import json
@@ -31,26 +31,20 @@ tags = {"Project": "Classly", "Environment": stack}
 
 if is_prod:
     domain = config.require("domain")
-    zone_id = config.require("zoneId")
 
-    # A zona pertence a outra conta: os registros são criados assumindo o
-    # papel route53-rr-role (permissão em iam-policy.json).
-    dns = aws.Provider(
-        "route53-shared-zone",
-        region="us-east-1",
-        assume_roles=[
-            aws.ProviderAssumeRoleArgs(
-                role_arn=config.require("route53RoleArn"),
-                external_id=config.require("route53ExternalId"),
-                session_name=f"classly-{stack}",
-            )
-        ],
+    # Zona própria do subdomínio (ex.: classly.negoci.online), delegada pelo
+    # dono do domínio pai para os servidores de nome exportados em
+    # `name_servers`. Protegida: recriá-la mudaria os NS e quebraria a delegação.
+    zone = aws.route53.Zone(
+        "classly-zone",
+        name=domain,
+        comment=f"Classly ({stack})",
+        tags=tags,
+        opts=pulumi.ResourceOptions(protect=True),
     )
 
     def dns_record(resource_name, **kwargs):
-        return aws.route53.Record(
-            resource_name, zone_id=zone_id, opts=pulumi.ResourceOptions(provider=dns), **kwargs
-        )
+        return aws.route53.Record(resource_name, zone_id=zone.zone_id, **kwargs)
 
 
 # --- DynamoDB ---
@@ -628,6 +622,8 @@ if is_prod:
         )
 
 pulumi.export("environment", stack)
+if is_prod:
+    pulumi.export("name_servers", zone.name_servers)
 pulumi.export("url", app_url)
 pulumi.export("api_url", api.api_endpoint)
 pulumi.export("cdn_domain", distribution.domain_name)
