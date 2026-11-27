@@ -109,7 +109,7 @@ no `history` da grade e na auditoria.
 
 ### Auditoria
 
-Ficam registrados: logins (gatilho pós-autenticação do Cognito), primeiro
+Ficam registrados: logins com e-mail ou Google (gatilho de geração de token do Cognito), primeiro
 acesso e mudanças de perfil, cadastros, alterações e exclusões, importações
 do Google Calendar, cada transição da grade e o resultado dos e-mails.
 Tentativas recusadas por falta de token válido não chegam às funções: ficam

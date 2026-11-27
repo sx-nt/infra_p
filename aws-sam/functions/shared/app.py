@@ -785,9 +785,25 @@ def handler(event, context):
         return _response(500, {"message": "Erro interno ao processar a solicitação."})
 
 
+# Origens de geração de token que correspondem a um login (as renovações
+# automáticas de token, TokenGeneration_RefreshTokens, não são logins).
+LOGIN_TRIGGERS = {
+    "TokenGeneration_HostedAuth": "Login gerenciado (e-mail ou Google)",
+    "TokenGeneration_Authentication": "Login por e-mail",
+    "TokenGeneration_NewPasswordChallenge": "Login com troca de senha",
+}
+
+
 def login_event_handler(event, context):
-    """Gatilho pós-autenticação do Cognito: registra cada login na auditoria."""
-    attributes = event.get("request", {}).get("userAttributes", {})
-    user = {"userId": attributes.get("sub", event.get("userName", "")), "email": attributes.get("email", "")}
-    _audit(user, "LOGIN", "user", user["userId"], {"source": event.get("triggerSource")})
+    """Gatilho de geração de token do Cognito: registra cada login na auditoria.
+
+    É chamado em todo login, inclusive com Google (o gatilho pós-autenticação
+    não é chamado para provedores federados). Devolve o evento sem alterar os tokens.
+    """
+    source = event.get("triggerSource")
+    if source in LOGIN_TRIGGERS:
+        attributes = event.get("request", {}).get("userAttributes", {})
+        user = {"userId": attributes.get("sub", event.get("userName", "")), "email": attributes.get("email", "")}
+        provider = "Google" if str(event.get("userName", "")).startswith("Google_") else "Cognito"
+        _audit(user, "LOGIN", "user", user["userId"], {"source": LOGIN_TRIGGERS[source], "provider": provider})
     return event

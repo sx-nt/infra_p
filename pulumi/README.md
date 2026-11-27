@@ -12,7 +12,7 @@ SAM + DynamoDB Local; o frontend é o build de [`web/`](../web).
 | DynamoDB: 8 tabelas sob demanda (professores, disciplinas, turmas, habilitações, disponibilidades, grades, usuários, auditoria) | ✓ | ✓ (com point-in-time recovery) |
 | Lambda: uma função por domínio, com papel IAM próprio restrito às tabelas que usa | ✓ | ✓ |
 | CloudWatch Logs: um grupo por função e o log de acesso da API (inclui requisições recusadas pelo autorizador), retenção de 14 dias | ✓ | ✓ |
-| Lambda de auditoria de login (gatilho pós-autenticação do Cognito) | ✓ | ✓ |
+| Lambda de auditoria de login (gatilho de geração de token do Cognito, chamado também nos logins com Google) | ✓ | ✓ |
 | AWS Budgets: alerta mensal (US$ 5 por padrão; 50%, 80% e previsão de 100%) para os e-mails da coordenação | — | ✓ |
 | API Gateway (HTTP API) com as rotas de [`docs/api.md`](../docs/api.md) e autorizador JWT (exceto `/health`) | ✓ | ✓ |
 | Cognito: base de usuários por e-mail com verificação por código, login gerenciado em português e Google opcional | ✓ | ✓ (com proteção contra exclusão) |

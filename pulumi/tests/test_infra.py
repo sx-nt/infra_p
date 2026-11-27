@@ -98,7 +98,7 @@ def test_lambdas_use_python_and_shared_code(stack):
 
 def test_logins_are_audited_by_cognito_trigger(stack):
     pool = one(stack, "aws:cognito/userPool:UserPool")
-    assert pool["lambdaConfig"]["postAuthentication"] == "arn:aws:mock:::classly-login-audit"
+    assert pool["lambdaConfig"]["preTokenGeneration"] == "arn:aws:mock:::classly-login-audit"
     permission = [p for p in of_type(stack, "aws:lambda/permission:Permission") if p["name"] == "classly-login-audit-cognito-permission"]
     assert permission[0]["inputs"]["principal"] == "cognito-idp.amazonaws.com"
 

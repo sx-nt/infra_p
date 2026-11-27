@@ -1,1 +1,1 @@
-"""Cognito post-authentication trigger."""
+"""Cognito pre token generation trigger (login audit)."""

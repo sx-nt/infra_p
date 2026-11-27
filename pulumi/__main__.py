@@ -349,7 +349,8 @@ def lambda_function(name, handler, table_names, environment, send_email=False):
     )
 
 
-# Gatilho pós-autenticação: cada login no Cognito vira um registro de auditoria.
+# Gatilho de geração de token: cada login (e-mail ou Google) vira um registro de
+# auditoria. O pós-autenticação não é chamado para logins com Google.
 login_audit_fn = lambda_function(
     "classly-login-audit",
     "auth_events.handler.handler",
@@ -399,7 +400,7 @@ user_pool = aws.cognito.UserPool(
         email_sending_account="COGNITO_DEFAULT"
     ),
     deletion_protection="ACTIVE" if is_prod else "INACTIVE",
-    lambda_config=aws.cognito.UserPoolLambdaConfigArgs(post_authentication=login_audit_fn.arn),
+    lambda_config=aws.cognito.UserPoolLambdaConfigArgs(pre_token_generation=login_audit_fn.arn),
     tags=tags,
 )
 

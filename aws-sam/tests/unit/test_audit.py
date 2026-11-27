@@ -64,12 +64,23 @@ def test_audit_is_only_for_coordination(api, catalog):
     assert api("GET", "/audit", email=TEACHER)[0] == 403
 
 
-def test_login_trigger_records_login(aws):
-    event = {"triggerSource": "PostAuthentication_Authentication", "userName": "u1",
-             "request": {"userAttributes": {"sub": "u1", "email": "ana@classly.test"}}}
-    assert app.login_event_handler(event, None) is event
-    [item] = app._items(app.TABLES["audit"])
-    assert (item["action"], item["email"], item["entityId"]) == ("LOGIN", "ana@classly.test", "u1")
+def trigger(source, user_name="u1"):
+    return {"triggerSource": source, "userName": user_name,
+            "request": {"userAttributes": {"sub": "u1", "email": "ana@classly.test"}}}
+
+
+def test_login_trigger_records_email_and_google_logins(aws):
+    for event in (trigger("TokenGeneration_HostedAuth", "Google_123"), trigger("TokenGeneration_Authentication")):
+        assert app.login_event_handler(event, None) is event
+    items = sorted(app._items(app.TABLES["audit"]), key=lambda i: i["auditId"])
+    assert [(i["action"], i["email"], i["details"]["provider"]) for i in items] == [
+        ("LOGIN", "ana@classly.test", "Google"), ("LOGIN", "ana@classly.test", "Cognito"),
+    ]
+
+
+def test_token_refresh_is_not_a_login(aws):
+    app.login_event_handler(trigger("TokenGeneration_RefreshTokens"), None)
+    assert app._items(app.TABLES["audit"]) == []
 
 
 def test_audit_failure_never_breaks_the_operation(api, monkeypatch):
