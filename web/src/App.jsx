@@ -3,6 +3,7 @@ import { api } from './api.js'
 import { getConfig, handleRedirect, getIdToken, loadConfig, login, logout } from './auth.js'
 import { Loading, Message } from './components.jsx'
 import { ROLE_NAME } from './labels.js'
+import Audit from './views/Audit.jsx'
 import Availability from './views/Availability.jsx'
 import Crud from './views/Crud.jsx'
 import Qualifications from './views/Qualifications.jsx'
@@ -70,6 +71,7 @@ const SECTIONS = {
   },
   habilitacoes: { label: 'Habilitações', roles: ['COORDINATOR'], render: () => <Qualifications /> },
   usuarios: { label: 'Usuários', roles: ['COORDINATOR'], render: (user) => <Users user={user} /> },
+  auditoria: { label: 'Auditoria', roles: ['COORDINATOR'], render: () => <Audit /> },
 }
 
 function currentSection() {

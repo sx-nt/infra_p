@@ -17,8 +17,38 @@ export const ROLE_NAME = {
 
 export const STATUS_NAME = {
   DRAFT: 'Rascunho',
+  IN_REVIEW: 'Em validação',
+  APPROVED: 'Aprovada',
   PUBLISHED: 'Publicada',
   ARCHIVED: 'Arquivada',
+}
+
+export const AUDIT_ACTION_NAME = {
+  LOGIN: 'Login',
+  USER_CREATED: 'Primeiro acesso',
+  ROLE_ASSIGNED: 'Perfil atribuído automaticamente',
+  ROLE_CHANGED: 'Perfil alterado',
+  CREATE: 'Cadastro',
+  UPDATE: 'Alteração',
+  DELETE: 'Exclusão',
+  CALENDAR_SYNC: 'Importação do Google Calendar',
+  SCHEDULE_IN_REVIEW: 'Grade enviada para validação',
+  SCHEDULE_APPROVED: 'Grade aprovada',
+  SCHEDULE_DRAFT: 'Grade devolvida para rascunho',
+  SCHEDULE_PUBLISHED: 'Grade publicada',
+  SCHEDULE_ARCHIVED: 'Grade arquivada',
+  NOTIFICATION_SENT: 'E-mails de publicação enviados',
+  NOTIFICATION_RESENT: 'E-mails reenviados',
+}
+
+export const ENTITY_NAME = {
+  teachers: 'Professor',
+  subjects: 'Disciplina',
+  classes: 'Turma',
+  qualifications: 'Habilitação',
+  availability: 'Disponibilidade',
+  schedule: 'Grade',
+  user: 'Usuário',
 }
 
 export function byId(items, key) {

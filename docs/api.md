@@ -6,6 +6,10 @@ com SAM (`aws-sam/template.yaml`) e DynamoDB Local
 (`aws-sam/docker-compose.yaml`). Na nuvem, o Pulumi (`pulumi/__main__.py`)
 publica as mesmas funções em um HTTP API atrás do CloudFront.
 
+A especificação completa está em [`openapi.yaml`](openapi.yaml) (OpenAPI 3.0) e
+pode ser explorada no navegador em `https://classly.negoci.online/api-docs/index.html`
+(Swagger UI publicado junto com o site).
+
 ## Endereços
 
 | Ambiente | URL base |
@@ -27,8 +31,9 @@ têm prefixo de estágio (estágio `$default`).
 | `ClassesTable` | `classId` | — | Código, período letivo e disciplina associada. |
 | `QualificationsTable` | `teacherId` | `subjectId` | Habilitação do professor para lecionar a disciplina. |
 | `AvailabilityTable` | `teacherId` | `availabilityId` | Intervalos semanais disponíveis ou bloqueados. `origin` pode ser `MANUAL` ou `GOOGLE`. |
-| `SchedulesTable` | `scheduleId` | — | Grade versionada por período: alocações, estado (`DRAFT`, `PUBLISHED`, `ARCHIVED`), autor e data de publicação. |
+| `SchedulesTable` | `scheduleId` | — | Grade versionada por período: alocações, estado, histórico de transições, aprovação, publicação e resultado das notificações. |
 | `UsersTable` | `userId` | — | Usuário do Cognito (`sub`): e-mail, nome, perfil (`COORDINATOR`, `TEACHER`, `PENDING`) e professor vinculado. |
+| `AuditTable` | `auditId` | — | Registro de operações críticas: quando, quem, ação, entidade e detalhes. O `auditId` começa pelo horário (microssegundos), o que ordena os registros. |
 
 Os nomes acima são os usados localmente; na nuvem o Pulumi cria
 `classly-<domínio>-<sufixo>` e informa o nome às funções pelas variáveis
@@ -63,6 +68,7 @@ uma grade inválida retorna `422` com a lista `errors`.
 | `GET /health` | Verifica se a função responde (pública). |
 | `GET /me` | Usuário autenticado, perfil e professor vinculado. |
 | `GET /users` | Lista usuários (coordenação). |
+| `GET /audit` | Auditoria, mais recentes primeiro; filtros `entity`, `action`, `email` e `limit` (coordenação). |
 | `PUT /users/{userId}/role` | Altera o perfil (`role`) de um usuário (coordenação). |
 | `GET /teachers` e `GET /teachers/{teacherId}` | Lista professores ou consulta um professor. |
 | `POST /teachers` e `PUT /teachers/{teacherId}` | Cadastra ou substitui professor (`name`, `email`; `teacherId` opcional no cadastro). |
@@ -77,24 +83,46 @@ uma grade inválida retorna `422` com a lista `errors`.
 | `PUT /teachers/{teacherId}/subjects/{subjectId}` | Cria/atualiza habilitação (`enabled`, padrão `true`). |
 | `DELETE /teachers/{teacherId}/subjects/{subjectId}` | Remove habilitação. |
 | `GET /teachers/{teacherId}/availability` | Lista restrições do professor. |
+| `POST /teachers/{teacherId}/availability/google` | Importa do Google Calendar (`accessToken` com escopo `calendar.readonly`) os compromissos que se repetem nas próximas 4 semanas como bloqueios `origin: GOOGLE`, mantendo os manuais. O token não é guardado. |
 | `PUT /teachers/{teacherId}/availability` | Substitui a lista de horários: `{ "availability": [{"day":"MON","start":"08:00","end":"10:00","type":"BLOCKED","origin":"MANUAL"}] }`. `type` aceita `BLOCKED` ou `AVAILABLE`; a validação de grade considera bloqueios. |
 | `POST /schedules/validate` | Valida `allocations` sem salvar a grade. |
+| `POST /schedules/generate` | Gera uma proposta automática para o período (`term`; opcionais `days` e `slots`), com `allocations`, `unresolved` (turmas que não couberam) e `errors`. Não salva. |
 | `GET /schedules` | Lista grades (coordenação: todas; professor: publicadas). |
 | `POST /schedules` | Valida e salva rascunho (`term`, `allocations`) com a próxima versão do período. |
 | `GET /schedules/{scheduleId}` | Consulta uma grade (professor: só publicadas). |
+| `PUT /schedules/{scheduleId}` | Ajusta as alocações de um rascunho (revalida). |
 | `DELETE /schedules/{scheduleId}` | Exclui um rascunho. |
-| `POST /schedules/{scheduleId}/publish` | Revalida e publica o rascunho, arquiva a versão publicada anterior do período e envia e-mail a cada professor com seus horários. A resposta traz `notification` com enviados e falhas. |
+| `POST /schedules/{scheduleId}/submit` | Rascunho → Em validação (revalida). |
+| `POST /schedules/{scheduleId}/approve` | Em validação → Aprovada (revalida). |
+| `POST /schedules/{scheduleId}/reject` | Em validação ou Aprovada → Rascunho, com `reason`. |
+| `POST /schedules/{scheduleId}/publish` | Aprovada → Publicada: revalida, arquiva a versão publicada anterior do período e envia e-mail a cada professor com seus horários (`notification`). |
+| `POST /schedules/{scheduleId}/notify` | Reenvia os e-mails que falharam (ou todos, com `{"all": true}`). |
+
+### Ciclo de vida da grade
+
+`Rascunho (DRAFT)` → `Em validação (IN_REVIEW)` → `Aprovada (APPROVED)` →
+`Publicada (PUBLISHED)` → `Arquivada (ARCHIVED)` quando uma nova versão do
+mesmo período é publicada. Em validação ou aprovada, a grade pode ser
+devolvida ao rascunho com um motivo. Só rascunhos podem ser ajustados ou
+excluídos: a grade publicada nunca muda silenciosamente. Cada transição fica
+no `history` da grade e na auditoria.
+
+### Auditoria
+
+Ficam registrados: logins (gatilho pós-autenticação do Cognito), primeiro
+acesso e mudanças de perfil, cadastros, alterações e exclusões, importações
+do Google Calendar, cada transição da grade e o resultado dos e-mails.
+Tentativas recusadas por falta de token válido não chegam às funções: ficam
+no log de acesso do API Gateway (CloudWatch), com status e erro do autorizador.
 
 Cada alocação contém `classId`, `teacherId`, `subjectId`, `day`, `start` e
 `end`. A validação verifica entidades existentes, disciplina da turma,
 habilitação do professor, carga horária semanal e sobreposição de horários
 por professor/turma, incluindo restrições bloqueadas.
 
-## Limites desta entrega
+## Observações
 
-- `origin: GOOGLE` identifica a origem dos intervalos recebidos, mas o backend
-  ainda não consulta a API Google Calendar.
-- A API valida e persiste a grade montada pela coordenação; a geração
-  automática e a trilha de auditoria ficam para as próximas sprints.
 - Em sandbox, o SES só entrega e-mails a endereços verificados; a resposta da
-  publicação informa cada envio que falhar.
+  publicação informa cada envio que falhar, e eles podem ser reenviados.
+- A importação do Google Calendar e o login com Google exigem um cliente
+  OAuth configurado em `classly:googleClientId` (ver `pulumi/README.md`).

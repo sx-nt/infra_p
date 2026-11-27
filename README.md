@@ -75,15 +75,19 @@ de cada usuário fica na tabela de usuários do DynamoDB:
 
 | Perfil | Como é atribuído | O que pode fazer |
 | --- | --- | --- |
-| Coordenação | E-mail em `classly:adminEmails` ou promovido por outro coordenador | Cadastros, habilitações, disponibilidade de todos, montar, validar e publicar grades, gerenciar usuários. |
-| Professor | Conta criada com o e-mail de um professor cadastrado | Informar a própria disponibilidade e consultar grades publicadas. |
+| Coordenação | E-mail em `classly:adminEmails` ou promovido por outro coordenador | Cadastros, habilitações, disponibilidade de todos, gerar, ajustar, validar, aprovar e publicar grades, reenviar e-mails, gerenciar usuários e consultar a auditoria. |
+| Professor | Conta criada com o e-mail de um professor cadastrado | Informar a própria disponibilidade (ou importá-la do Google Calendar) e consultar grades publicadas. |
 | Aguardando liberação | Demais contas | Nenhum acesso aos dados até a coordenação liberar. |
 
 Ao publicar uma grade, cada professor recebe por e-mail (Amazon SES) os
 próprios horários. O contrato da API está em [docs/api.md](docs/api.md).
 
-Integração direta com o Google Calendar, geração automática da grade e
-trilha de auditoria ficam para as próximas sprints.
+A coordenação pode gerar uma proposta de grade automaticamente, ajustá-la e
+levá-la pelo ciclo Rascunho → Em validação → Aprovada → Publicada; o professor
+pode importar compromissos semanais do Google Calendar. Todas as operações
+críticas ficam na **Auditoria**. A API está documentada em OpenAPI
+([`docs/openapi.yaml`](docs/openapi.yaml)), visível em `/api-docs/index.html`
+no site publicado.
 
 ## Como executar
 
@@ -131,9 +135,11 @@ Ao final, `pulumi up` mostra a `url` do sistema (ex.:
    **Coordenação**.
 3. Cadastre uma disciplina, um professor (com um e-mail que você acesse), uma
    turma e a habilitação do professor na disciplina.
-4. Em **Grades → Nova grade**, monte as aulas até a carga horária fechar,
-   **Valide**, **Salve o rascunho** e **Publique**.
-5. Em uma janela anônima, crie a conta com o e-mail do professor: ele entra
+4. Em **Grades → Nova grade**, escolha o período e clique em **Gerar proposta
+   automaticamente** (ou monte as aulas à mão), **Valide** e **Salve o
+   rascunho**. Depois **Envie para validação**, **Aprove** e **Publique**.
+5. Em **Auditoria**, confira o registro de cada operação.
+6. Em uma janela anônima, crie a conta com o e-mail do professor: ele entra
    direto como **Professor** e vê a grade publicada e a própria disponibilidade.
 
 Com `classly:senderEmail` configurado e confirmado, o professor recebe os

@@ -1,0 +1,625 @@
+openapi: 3.0.3
+info:
+  title: Classly API
+  version: "1.0"
+  description: |
+    API REST do Classly: estrutura curricular, disponibilidade dos professores,
+    geração, validação, aprovação e publicação de grades de horários, usuários
+    e auditoria.
+
+    Todas as rotas, exceto `GET /health`, exigem o **ID token** do Amazon
+    Cognito em `Authorization: Bearer <token>`. O perfil do usuário define o
+    acesso: `COORDINATOR` (todas as rotas), `TEACHER` (leitura, a própria
+    disponibilidade e grades publicadas) e `PENDING` (apenas `GET /me`).
+servers:
+  - url: https://classly.negoci.online/api
+    description: Produção
+  - url: http://127.0.0.1:3000
+    description: SAM local
+security:
+  - cognito: []
+
+# Respostas comuns às ações do ciclo de vida da grade (âncora YAML).
+x-lifecycle-responses: &lifecycle
+  "200": { description: Grade atualizada, content: { application/json: { schema: { $ref: "#/components/schemas/Schedule" } } } }
+  "409": { $ref: "#/components/responses/Conflict" }
+  "422": { $ref: "#/components/responses/Conflicts" }
+
+tags:
+  - name: Sistema
+  - name: Usuários
+  - name: Estrutura curricular
+  - name: Disponibilidade
+  - name: Grades
+  - name: Auditoria
+
+paths:
+  /health:
+    get:
+      tags: [Sistema]
+      summary: Verifica se a API responde
+      security: []
+      responses:
+        "200":
+          description: API disponível
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: classly-api }
+
+  /me:
+    get:
+      tags: [Usuários]
+      summary: Usuário autenticado (criado no primeiro acesso)
+      responses:
+        "200": { description: Usuário, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /users:
+    get:
+      tags: [Usuários]
+      summary: Lista usuários (coordenação)
+      responses:
+        "200": { description: Usuários, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/User" } } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /users/{userId}/role:
+    put:
+      tags: [Usuários]
+      summary: Altera o perfil de um usuário (coordenação)
+      parameters: [{ $ref: "#/components/parameters/userId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/Role" }
+      responses:
+        "200": { description: Usuário atualizado, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /teachers:
+    get:
+      tags: [Estrutura curricular]
+      summary: Lista professores
+      responses:
+        "200": { description: Professores, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Teacher" } } } } }
+    post:
+      tags: [Estrutura curricular]
+      summary: Cadastra professor (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/Teacher" }
+      responses:
+        "201": { description: Criado, content: { application/json: { schema: { $ref: "#/components/schemas/Teacher" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /teachers/{teacherId}:
+    parameters: [{ $ref: "#/components/parameters/teacherId" }]
+    get:
+      tags: [Estrutura curricular]
+      summary: Consulta professor
+      responses:
+        "200": { description: Professor, content: { application/json: { schema: { $ref: "#/components/schemas/Teacher" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Estrutura curricular]
+      summary: Substitui professor (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/Teacher" }
+      responses:
+        "200": { description: Atualizado, content: { application/json: { schema: { $ref: "#/components/schemas/Teacher" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Estrutura curricular]
+      summary: Remove professor (coordenação)
+      responses:
+        "204": { description: Removido }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /subjects:
+    get:
+      tags: [Estrutura curricular]
+      summary: Lista disciplinas
+      responses:
+        "200": { description: Disciplinas, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Subject" } } } } }
+    post:
+      tags: [Estrutura curricular]
+      summary: Cadastra disciplina (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/Subject" }
+      responses:
+        "201": { description: Criada, content: { application/json: { schema: { $ref: "#/components/schemas/Subject" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /subjects/{subjectId}:
+    parameters: [{ $ref: "#/components/parameters/subjectId" }]
+    get:
+      tags: [Estrutura curricular]
+      summary: Consulta disciplina
+      responses:
+        "200": { description: Disciplina, content: { application/json: { schema: { $ref: "#/components/schemas/Subject" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Estrutura curricular]
+      summary: Substitui disciplina (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/Subject" }
+      responses:
+        "200": { description: Atualizada, content: { application/json: { schema: { $ref: "#/components/schemas/Subject" } } } }
+    delete:
+      tags: [Estrutura curricular]
+      summary: Remove disciplina sem turmas associadas (coordenação)
+      responses:
+        "204": { description: Removida }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /classes:
+    get:
+      tags: [Estrutura curricular]
+      summary: Lista turmas
+      responses:
+        "200": { description: Turmas, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Class" } } } } }
+    post:
+      tags: [Estrutura curricular]
+      summary: Cadastra turma (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/Class" }
+      responses:
+        "201": { description: Criada, content: { application/json: { schema: { $ref: "#/components/schemas/Class" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /classes/{classId}:
+    parameters: [{ $ref: "#/components/parameters/classId" }]
+    get:
+      tags: [Estrutura curricular]
+      summary: Consulta turma
+      responses:
+        "200": { description: Turma, content: { application/json: { schema: { $ref: "#/components/schemas/Class" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Estrutura curricular]
+      summary: Substitui turma (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/Class" }
+      responses:
+        "200": { description: Atualizada, content: { application/json: { schema: { $ref: "#/components/schemas/Class" } } } }
+    delete:
+      tags: [Estrutura curricular]
+      summary: Remove turma (coordenação)
+      responses:
+        "204": { description: Removida }
+
+  /qualifications:
+    get:
+      tags: [Estrutura curricular]
+      summary: Lista habilitações
+      responses:
+        "200": { description: Habilitações, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Qualification" } } } } }
+  /teachers/{teacherId}/subjects/{subjectId}:
+    parameters:
+      - { $ref: "#/components/parameters/teacherId" }
+      - { $ref: "#/components/parameters/subjectId" }
+    put:
+      tags: [Estrutura curricular]
+      summary: Habilita ou suspende o professor na disciplina (coordenação)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean, default: true }
+      responses:
+        "200": { description: Habilitação, content: { application/json: { schema: { $ref: "#/components/schemas/Qualification" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Estrutura curricular]
+      summary: Remove habilitação (coordenação)
+      responses:
+        "204": { description: Removida }
+
+  /teachers/{teacherId}/availability:
+    parameters: [{ $ref: "#/components/parameters/teacherId" }]
+    get:
+      tags: [Disponibilidade]
+      summary: Lista restrições do professor (o próprio professor ou a coordenação)
+      responses:
+        "200": { description: Restrições, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Availability" } } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      tags: [Disponibilidade]
+      summary: Substitui a lista de restrições
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [availability]
+              properties:
+                availability: { type: array, items: { $ref: "#/components/schemas/AvailabilityInput" } }
+      responses:
+        "200": { description: Restrições salvas }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /teachers/{teacherId}/availability/google:
+    parameters: [{ $ref: "#/components/parameters/teacherId" }]
+    post:
+      tags: [Disponibilidade]
+      summary: Importa compromissos semanais do Google Calendar
+      description: |
+        Recebe um token de acesso do Google com escopo `calendar.readonly`,
+        consulta os horários ocupados das próximas 4 semanas e transforma os que
+        se repetem em pelo menos 2 semanas em bloqueios (`origin: GOOGLE`).
+        Restrições manuais são mantidas; o token não é armazenado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accessToken]
+              properties:
+                accessToken: { type: string }
+      responses:
+        "200":
+          description: Importação concluída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: { type: integer }
+                  message: { type: string }
+                  availability: { type: array, items: { $ref: "#/components/schemas/Availability" } }
+        "502": { description: Falha ou autorização expirada no Google Calendar, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /schedules:
+    get:
+      tags: [Grades]
+      summary: Lista grades (professor vê apenas as publicadas)
+      responses:
+        "200": { description: Grades, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Schedule" } } } } }
+    post:
+      tags: [Grades]
+      summary: Valida e salva um rascunho (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/ScheduleInput" }
+      responses:
+        "201": { description: Rascunho criado, content: { application/json: { schema: { $ref: "#/components/schemas/Schedule" } } } }
+        "422": { $ref: "#/components/responses/Conflicts" }
+  /schedules/validate:
+    post:
+      tags: [Grades]
+      summary: Valida alocações sem salvar (coordenação)
+      requestBody: { $ref: "#/components/requestBodies/ScheduleInput" }
+      responses:
+        "200":
+          description: Resultado da validação
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  allocations: { type: array, items: { $ref: "#/components/schemas/Allocation" } }
+                  errors: { type: array, items: { $ref: "#/components/schemas/ValidationError" } }
+  /schedules/generate:
+    post:
+      tags: [Grades]
+      summary: Gera uma proposta automática para o período (coordenação)
+      description: |
+        Aloca cada turma do período com um professor habilitado, respeitando
+        carga horária, bloqueios e conflitos e preferindo horários marcados como
+        disponíveis. Não salva: a proposta é revisada e salva como rascunho.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [term]
+              properties:
+                term: { type: string, example: "2026.2" }
+                days: { type: array, items: { $ref: "#/components/schemas/Weekday" }, description: "Padrão: MON a FRI" }
+                slots:
+                  type: array
+                  description: "Blocos de aula. Padrão: 08:00-10:00, 10:00-12:00, 13:30-15:30, 15:30-17:30, 19:00-21:00, 21:00-23:00"
+                  items: { type: object, properties: { start: { type: string }, end: { type: string } } }
+      responses:
+        "200":
+          description: Proposta
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  term: { type: string }
+                  allocations: { type: array, items: { $ref: "#/components/schemas/Allocation" } }
+                  unresolved:
+                    type: array
+                    items: { type: object, properties: { classId: { type: string }, reason: { type: string } } }
+                  errors: { type: array, items: { $ref: "#/components/schemas/ValidationError" } }
+  /schedules/{scheduleId}:
+    parameters: [{ $ref: "#/components/parameters/scheduleId" }]
+    get:
+      tags: [Grades]
+      summary: Consulta uma grade
+      responses:
+        "200": { description: Grade, content: { application/json: { schema: { $ref: "#/components/schemas/Schedule" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Grades]
+      summary: Ajusta as alocações de um rascunho (coordenação)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [allocations]
+              properties:
+                allocations: { type: array, items: { $ref: "#/components/schemas/AllocationInput" } }
+      responses:
+        "200": { description: Rascunho atualizado, content: { application/json: { schema: { $ref: "#/components/schemas/Schedule" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Conflicts" }
+    delete:
+      tags: [Grades]
+      summary: Exclui um rascunho (coordenação)
+      responses:
+        "204": { description: Excluído }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /schedules/{scheduleId}/submit:
+    post:
+      tags: [Grades]
+      summary: "Rascunho → Em validação (revalida)"
+      parameters: [{ $ref: "#/components/parameters/scheduleId" }]
+      responses: *lifecycle
+  /schedules/{scheduleId}/approve:
+    post:
+      tags: [Grades]
+      summary: "Em validação → Aprovada (revalida)"
+      parameters: [{ $ref: "#/components/parameters/scheduleId" }]
+      responses: *lifecycle
+  /schedules/{scheduleId}/reject:
+    post:
+      tags: [Grades]
+      summary: "Em validação ou Aprovada → Rascunho, com motivo"
+      parameters: [{ $ref: "#/components/parameters/scheduleId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses: *lifecycle
+  /schedules/{scheduleId}/publish:
+    post:
+      tags: [Grades]
+      summary: "Aprovada → Publicada: arquiva a versão anterior e envia e-mail aos professores"
+      parameters: [{ $ref: "#/components/parameters/scheduleId" }]
+      responses: *lifecycle
+  /schedules/{scheduleId}/notify:
+    post:
+      tags: [Grades]
+      summary: Reenvia os e-mails que falharam (ou todos, com `all`)
+      parameters: [{ $ref: "#/components/parameters/scheduleId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                all: { type: boolean, default: false }
+      responses: *lifecycle
+
+  /audit:
+    get:
+      tags: [Auditoria]
+      summary: Registro de operações críticas, mais recentes primeiro (coordenação)
+      parameters:
+        - { name: entity, in: query, schema: { type: string, example: schedule } }
+        - { name: action, in: query, schema: { type: string, example: SCHEDULE_PUBLISHED } }
+        - { name: email, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 200, maximum: 1000 } }
+      responses:
+        "200": { description: Registros, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AuditEntry" } } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    cognito:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: ID token emitido pelo Amazon Cognito para o cliente web do Classly.
+
+  parameters:
+    userId: { name: userId, in: path, required: true, schema: { type: string } }
+    teacherId: { name: teacherId, in: path, required: true, schema: { type: string } }
+    subjectId: { name: subjectId, in: path, required: true, schema: { type: string } }
+    classId: { name: classId, in: path, required: true, schema: { type: string } }
+    scheduleId: { name: scheduleId, in: path, required: true, schema: { type: string } }
+
+  requestBodies:
+    Teacher:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [name, email]
+            properties:
+              teacherId: { type: string, description: Opcional no cadastro }
+              name: { type: string }
+              email: { type: string, format: email }
+    Subject:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, name, weeklyHours]
+            properties:
+              subjectId: { type: string }
+              code: { type: string }
+              name: { type: string }
+              weeklyHours: { type: integer, minimum: 1 }
+    Class:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code, term, subjectId]
+            properties:
+              classId: { type: string }
+              code: { type: string }
+              term: { type: string, example: "2026.2" }
+              subjectId: { type: string }
+    ScheduleInput:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [term, allocations]
+            properties:
+              term: { type: string }
+              allocations: { type: array, items: { $ref: "#/components/schemas/AllocationInput" } }
+
+  responses:
+    BadRequest: { description: Dados inválidos, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Unauthorized: { description: "Token ausente, expirado ou inválido" }
+    Forbidden: { description: Perfil sem permissão, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    NotFound: { description: Não encontrado, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Conflict: { description: Conflito com o estado atual, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Conflicts:
+      description: A grade viola regras (carga horária, conflitos, bloqueios, habilitação)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { type: string }
+              errors: { type: array, items: { $ref: "#/components/schemas/ValidationError" } }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        message: { type: string }
+    Role: { type: string, enum: [COORDINATOR, TEACHER, PENDING] }
+    Weekday: { type: string, enum: [MON, TUE, WED, THU, FRI, SAT, SUN] }
+    User:
+      type: object
+      properties:
+        userId: { type: string, description: "sub do Cognito" }
+        email: { type: string }
+        name: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        teacherId: { type: string, description: Professor vinculado pelo e-mail }
+        createdAt: { type: string, format: date-time }
+    Teacher:
+      type: object
+      properties:
+        teacherId: { type: string }
+        name: { type: string }
+        email: { type: string }
+    Subject:
+      type: object
+      properties:
+        subjectId: { type: string }
+        code: { type: string }
+        name: { type: string }
+        weeklyHours: { type: integer }
+    Class:
+      type: object
+      properties:
+        classId: { type: string }
+        code: { type: string }
+        term: { type: string }
+        subjectId: { type: string }
+    Qualification:
+      type: object
+      properties:
+        teacherId: { type: string }
+        subjectId: { type: string }
+        enabled: { type: boolean }
+    AvailabilityInput:
+      type: object
+      required: [day, start, end]
+      properties:
+        day: { $ref: "#/components/schemas/Weekday" }
+        start: { type: string, example: "08:00" }
+        end: { type: string, example: "10:00" }
+        type: { type: string, enum: [BLOCKED, AVAILABLE], default: BLOCKED }
+        origin: { type: string, enum: [MANUAL, GOOGLE], default: MANUAL }
+    Availability:
+      allOf:
+        - $ref: "#/components/schemas/AvailabilityInput"
+        - type: object
+          properties:
+            teacherId: { type: string }
+            availabilityId: { type: string }
+    AllocationInput:
+      type: object
+      required: [classId, teacherId, subjectId, day, start, end]
+      properties:
+        classId: { type: string }
+        teacherId: { type: string }
+        subjectId: { type: string }
+        day: { $ref: "#/components/schemas/Weekday" }
+        start: { type: string, example: "08:00" }
+        end: { type: string, example: "10:00" }
+    Allocation:
+      allOf:
+        - $ref: "#/components/schemas/AllocationInput"
+        - type: object
+          properties:
+            allocationId: { type: string }
+    ValidationError:
+      type: object
+      properties:
+        allocation: { type: integer, description: Índice da alocação (quando aplicável) }
+        classId: { type: string }
+        reason: { type: string }
+    Schedule:
+      type: object
+      properties:
+        scheduleId: { type: string }
+        term: { type: string }
+        version: { type: integer }
+        status: { type: string, enum: [DRAFT, IN_REVIEW, APPROVED, PUBLISHED, ARCHIVED] }
+        allocations: { type: array, items: { $ref: "#/components/schemas/Allocation" } }
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { type: string }
+              at: { type: string, format: date-time }
+              by: { type: string }
+              reason: { type: string }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        approvedAt: { type: string, format: date-time }
+        approvedBy: { type: string }
+        publishedAt: { type: string, format: date-time }
+        publishedBy: { type: string }
+        notification:
+          type: object
+          properties:
+            sent: { type: integer }
+            failed: { type: array, items: { type: object, properties: { teacherId: { type: string }, reason: { type: string } } } }
+            skipped: { type: string }
+    AuditEntry:
+      type: object
+      properties:
+        auditId: { type: string }
+        at: { type: string, format: date-time }
+        userId: { type: string }
+        email: { type: string }
+        action: { type: string, example: SCHEDULE_PUBLISHED }
+        entity: { type: string, example: schedule }
+        entityId: { type: string }
+        details: { type: object }

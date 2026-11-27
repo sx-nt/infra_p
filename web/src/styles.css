@@ -93,6 +93,7 @@ input, select { width: 100%; }
 .field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
 .field span { color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.actions > .field { flex: 1 1 200px; }
 .row-editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.5rem; align-items: end; padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
 .row-editor.allocation { grid-template-columns: 2rem repeat(auto-fit, minmax(130px, 1fr)); }
 .row-number { align-self: center; color: var(--muted); font-weight: 600; }
@@ -108,6 +109,12 @@ input, select { width: 100%; }
 .badge.ok, .status-PUBLISHED { background: var(--ok-bg); color: var(--ok-text); }
 .badge.warn, .status-DRAFT { background: var(--warn-bg); color: var(--warn-text); }
 .badge.off, .status-ARCHIVED { background: var(--border); color: var(--muted); }
+.status-IN_REVIEW, .status-APPROVED, .badge.origin { background: var(--mine); color: var(--primary); }
+.badge.origin { align-self: center; }
+.align-end { align-self: flex-end; }
+.history { margin-top: 1rem; font-size: 0.9rem; }
+.history summary { cursor: pointer; color: var(--muted); }
+.history ol { margin: 0.5rem 0 0; padding-left: 1.2rem; }
 .load { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.75rem 0; }
 
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }

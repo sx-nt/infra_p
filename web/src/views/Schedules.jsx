@@ -10,7 +10,7 @@ const newAllocation = () => ({ classId: '', teacherId: '', day: 'MON', start: '0
 function WeekGrid({ schedule, lookups, highlightTeacherId, onlyMine }) {
   const { teachers, subjects, classes } = lookups
   const allocations = schedule.allocations.filter((a) => !onlyMine || a.teacherId === highlightTeacherId)
-  const days = DAYS.filter(([day]) => day !== 'SUN' || allocations.some((a) => a.day === 'SUN'))
+  const days = DAYS.filter(([day]) => !['SAT', 'SUN'].includes(day) || allocations.some((a) => a.day === day))
   if (allocations.length === 0) return <Empty>Nenhuma aula para exibir.</Empty>
   return (
     <div className="week">
@@ -35,11 +35,18 @@ function WeekGrid({ schedule, lookups, highlightTeacherId, onlyMine }) {
   )
 }
 
-function ScheduleEditor({ lookups, qualifications, onSaved, onCancel }) {
+// Monta uma grade nova ou ajusta um rascunho existente (schedule).
+function ScheduleEditor({ lookups, qualifications, schedule, onSaved, onCancel }) {
   const { classes, subjects, teachers } = lookups
-  const [term, setTerm] = useState('')
-  const [rows, setRows] = useState([newAllocation()])
+  const editing = Boolean(schedule)
+  const [term, setTerm] = useState(schedule?.term || '')
+  const [rows, setRows] = useState(
+    schedule
+      ? schedule.allocations.map(({ classId, teacherId, day, start, end }) => ({ classId, teacherId, day, start, end }))
+      : [newAllocation()],
+  )
   const [result, setResult] = useState(null)
+  const [unresolved, setUnresolved] = useState([])
   const [message, setMessage] = useState({})
   const [busy, setBusy] = useState(false)
 
@@ -64,45 +71,65 @@ function ScheduleEditor({ lookups, qualifications, onSaved, onCancel }) {
     return { c, allocated, required: Number(subjects[c.subjectId]?.weeklyHours || 0) }
   })
 
-  const validate = async () => {
+  const run = async (task) => {
     setBusy(true)
     setMessage({})
     try {
-      setResult(await api('/schedules/validate', { method: 'POST', body: payload() }))
+      await task()
     } catch (err) {
       setMessage({ error: err.message })
+      if (err.errors?.length) setResult({ valid: false, errors: err.errors })
     } finally {
       setBusy(false)
     }
   }
 
-  const save = async () => {
-    setBusy(true)
-    setMessage({})
-    try {
-      const schedule = await api('/schedules', { method: 'POST', body: payload() })
-      onSaved(schedule)
-    } catch (err) {
-      setMessage({ error: err.message })
-      if (err.errors.length) setResult({ valid: false, errors: err.errors })
-    } finally {
-      setBusy(false)
-    }
-  }
+  const generate = () =>
+    run(async () => {
+      if (rows.some((r) => r.classId) && !window.confirm('Substituir as aulas atuais pela proposta gerada?')) return
+      const proposal = await api('/schedules/generate', { method: 'POST', body: { term } })
+      setRows(proposal.allocations.length ? proposal.allocations : [newAllocation()])
+      setUnresolved(proposal.unresolved)
+      setResult(proposal.errors.length ? { valid: false, errors: proposal.errors } : null)
+      setMessage({
+        ok: `Proposta gerada com ${proposal.allocations.length} aula(s). Revise, ajuste se precisar e salve o rascunho.`,
+      })
+    })
+
+  const validate = () => run(async () => setResult(await api('/schedules/validate', { method: 'POST', body: payload() })))
+
+  const save = () =>
+    run(async () => {
+      const saved = editing
+        ? await api(`/schedules/${schedule.scheduleId}`, { method: 'PUT', body: { allocations: payload().allocations } })
+        : await api('/schedules', { method: 'POST', body: payload() })
+      onSaved(saved)
+    })
 
   return (
     <div className="card">
-      <h3>Nova grade</h3>
+      <h3>{editing ? `Ajustar rascunho ${schedule.term} · versão ${schedule.version}` : 'Nova grade'}</h3>
       {terms.length === 0 ? (
         <Message>Cadastre turmas com período letivo antes de montar uma grade.</Message>
       ) : (
         <>
-          <Field label="Período letivo">
-            <select value={term} onChange={(e) => { setTerm(e.target.value); setRows([newAllocation()]); setResult(null) }}>
-              <option value="">Selecione…</option>
-              {terms.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </Field>
+          <div className="actions">
+            <Field label="Período letivo">
+              <select
+                value={term}
+                disabled={editing}
+                onChange={(e) => { setTerm(e.target.value); setRows([newAllocation()]); setResult(null); setUnresolved([]) }}
+              >
+                <option value="">Selecione…</option>
+                {terms.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+            {term && (
+              <button type="button" className="align-end" disabled={busy} onClick={generate}>
+                Gerar proposta automaticamente
+              </button>
+            )}
+          </div>
 
           {term && (
             <>
@@ -113,6 +140,13 @@ function ScheduleEditor({ lookups, qualifications, onSaved, onCancel }) {
                   </span>
                 ))}
               </div>
+
+              {unresolved.length > 0 && (
+                <Message>
+                  Turmas que a geração não conseguiu alocar:
+                  <ErrorList errors={unresolved.map((u) => ({ reason: `${classes[u.classId]?.code || u.classId}: ${u.reason}` }))} />
+                </Message>
+              )}
 
               {rows.map((row, index) => {
                 const subjectId = classes[row.classId]?.subjectId
@@ -158,6 +192,7 @@ function ScheduleEditor({ lookups, qualifications, onSaved, onCancel }) {
                   <ErrorList errors={result.errors} />
                 </Message>
               )}
+              <Message kind="success">{message.ok}</Message>
               <Message>{message.error}</Message>
 
               <div className="actions">
@@ -165,13 +200,47 @@ function ScheduleEditor({ lookups, qualifications, onSaved, onCancel }) {
                   Adicionar aula
                 </button>
                 <button type="button" disabled={busy} onClick={validate}>Validar</button>
-                <button type="button" className="primary" disabled={busy} onClick={save}>Salvar rascunho</button>
+                <button type="button" className="primary" disabled={busy} onClick={save}>
+                  {editing ? 'Salvar ajustes' : 'Salvar rascunho'}
+                </button>
                 <button type="button" onClick={onCancel}>Cancelar</button>
               </div>
             </>
           )}
         </>
       )}
+    </div>
+  )
+}
+
+function History({ schedule }) {
+  if (!schedule.history?.length) return null
+  return (
+    <details className="history">
+      <summary>Histórico</summary>
+      <ol>
+        {schedule.history.map((entry, index) => (
+          <li key={index}>
+            <strong>{STATUS_NAME[entry.status] || entry.status}</strong> · {formatDate(entry.at)} · {entry.by}
+            {entry.reason && <> — “{entry.reason}”</>}
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
+function NotificationStatus({ notification, teachers }) {
+  if (!notification) return null
+  if (notification.skipped) return <p className="muted small">E-mails não enviados: {notification.skipped}</p>
+  return (
+    <div className="small">
+      <p className="muted">
+        E-mails: {notification.sent} enviado(s)
+        {notification.failed?.length ? `, ${notification.failed.length} com falha` : ''}
+        {notification.lastAttemptAt ? ` · última tentativa em ${formatDate(notification.lastAttemptAt)}` : ''}
+      </p>
+      <ErrorList errors={(notification.failed || []).map((f) => ({ reason: `${teachers[f.teacherId]?.name || f.teacherId}: ${f.reason}` }))} />
     </div>
   )
 }
@@ -184,7 +253,7 @@ export default function Schedules({ user }) {
       : ['/schedules', '/teachers', '/subjects', '/classes'],
   )
   const [selected, setSelected] = useState(null)
-  const [creating, setCreating] = useState(false)
+  const [editor, setEditor] = useState(null) // null | 'new' | rascunho em edição
   const [onlyMine, setOnlyMine] = useState(!isCoordinator)
   const [message, setMessage] = useState({})
 
@@ -197,21 +266,27 @@ export default function Schedules({ user }) {
   }
   const current = schedules.find((s) => s.scheduleId === selected) || schedules[0]
 
-  const publish = async (schedule) => {
-    if (!window.confirm(`Publicar a grade ${schedule.term} (versão ${schedule.version})? Os professores serão notificados por e-mail.`)) return
+  const act = async (schedule, action, { confirm, body, success } = {}) => {
+    if (confirm && !window.confirm(confirm)) return
     try {
-      const published = await api(`/schedules/${schedule.scheduleId}/publish`, { method: 'POST' })
-      const n = published.notification || {}
-      setMessage({
-        ok: n.skipped
-          ? `Grade publicada. E-mails não enviados: ${n.skipped}`
-          : `Grade publicada. ${n.sent} professor(es) notificado(s)${n.failed?.length ? `; ${n.failed.length} falha(s) no envio` : ''}.`,
-        errors: n.failed?.map((f) => ({ reason: `${lookups.teachers[f.teacherId]?.name || f.teacherId}: ${f.reason}` })),
-      })
+      const updated = await api(`/schedules/${schedule.scheduleId}/${action}`, { method: 'POST', body })
+      setSelected(updated.scheduleId)
+      setMessage({ ok: typeof success === 'function' ? success(updated) : success })
       await reload()
     } catch (err) {
       setMessage({ error: err.message, errors: err.errors })
     }
+  }
+
+  const publishedMessage = (published) => {
+    const n = published.notification || {}
+    if (n.skipped) return `Grade publicada. E-mails não enviados: ${n.skipped}`
+    return `Grade publicada. ${n.sent} professor(es) notificado(s)${n.failed?.length ? `; ${n.failed.length} falha(s) no envio` : ''}.`
+  }
+
+  const reject = (schedule) => {
+    const reason = window.prompt('Motivo da devolução para rascunho:')
+    if (reason?.trim()) act(schedule, 'reject', { body: { reason }, success: 'Grade devolvida para rascunho.' })
   }
 
   const remove = async (schedule) => {
@@ -226,12 +301,63 @@ export default function Schedules({ user }) {
     }
   }
 
+  const actions = (schedule) => {
+    switch (schedule.status) {
+      case 'DRAFT':
+        return (
+          <>
+            <button type="button" className="primary" onClick={() => act(schedule, 'submit', { success: 'Grade enviada para validação.' })}>
+              Enviar para validação
+            </button>
+            <button type="button" onClick={() => { setEditor(schedule); setMessage({}) }}>Ajustar</button>
+            <button type="button" className="danger" onClick={() => remove(schedule)}>Excluir</button>
+          </>
+        )
+      case 'IN_REVIEW':
+        return (
+          <>
+            <button type="button" className="primary" onClick={() => act(schedule, 'approve', { success: 'Grade aprovada. Ela já pode ser publicada.' })}>
+              Aprovar
+            </button>
+            <button type="button" onClick={() => reject(schedule)}>Devolver</button>
+          </>
+        )
+      case 'APPROVED':
+        return (
+          <>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => act(schedule, 'publish', {
+                confirm: `Publicar a grade ${schedule.term} (versão ${schedule.version})? Os professores serão notificados por e-mail.`,
+                success: publishedMessage,
+              })}
+            >
+              Publicar
+            </button>
+            <button type="button" onClick={() => reject(schedule)}>Devolver</button>
+          </>
+        )
+      case 'PUBLISHED':
+        return schedule.notification?.failed?.length ? (
+          <button type="button" onClick={() => act(schedule, 'notify', { success: (s) => `Reenvio concluído: ${s.notification.sent} e-mail(s) enviado(s) no total.` })}>
+            Reenviar e-mails com falha
+          </button>
+        ) : null
+      default:
+        return null
+    }
+  }
+
   return (
     <section>
       <header className="section-header">
         <h2>{isCoordinator ? 'Grades de horários' : 'Grades publicadas'}</h2>
-        {isCoordinator && !creating && (
-          <button type="button" className="primary" onClick={() => { setCreating(true); setMessage({}) }}>Nova grade</button>
+        {isCoordinator && !editor && (
+          <button type="button" className="primary" onClick={() => { setEditor('new'); setMessage({}) }}>Nova grade</button>
+        )}
+        {isCoordinator && (
+          <p className="muted">Ciclo: Rascunho → Em validação → Aprovada → Publicada. Toda etapa revalida os conflitos.</p>
         )}
       </header>
 
@@ -239,15 +365,17 @@ export default function Schedules({ user }) {
       <Message>{message.error}</Message>
       {message.errors?.length > 0 && <ErrorList errors={message.errors} />}
 
-      {creating && (
+      {editor && (
         <ScheduleEditor
+          key={editor === 'new' ? 'new' : editor.scheduleId}
           lookups={lookups}
           qualifications={qualifications}
-          onCancel={() => setCreating(false)}
+          schedule={editor === 'new' ? null : editor}
+          onCancel={() => setEditor(null)}
           onSaved={async (schedule) => {
-            setCreating(false)
+            setEditor(null)
             setSelected(schedule.scheduleId)
-            setMessage({ ok: 'Rascunho salvo. Revise e publique quando estiver pronto.' })
+            setMessage({ ok: 'Rascunho salvo. Envie para validação quando estiver pronto.' })
             await reload()
           }}
         />
@@ -267,7 +395,7 @@ export default function Schedules({ user }) {
                 >
                   <strong>{s.term}</strong> · versão {s.version}
                   <span className={`badge status-${s.status}`}>{STATUS_NAME[s.status] || s.status}</span>
-                  <span className="muted small">{formatDate(s.publishedAt || s.createdAt)}</span>
+                  <span className="muted small">{formatDate(s.publishedAt || s.updatedAt || s.createdAt)}</span>
                 </button>
               </li>
             ))}
@@ -292,15 +420,14 @@ export default function Schedules({ user }) {
                       Só meus horários
                     </label>
                   )}
-                  {isCoordinator && current.status === 'DRAFT' && (
-                    <>
-                      <button type="button" className="primary" onClick={() => publish(current)}>Publicar</button>
-                      <button type="button" className="danger" onClick={() => remove(current)}>Excluir</button>
-                    </>
-                  )}
+                  {isCoordinator && actions(current)}
                 </div>
               </div>
+              {isCoordinator && current.status === 'PUBLISHED' && (
+                <NotificationStatus notification={current.notification} teachers={lookups.teachers} />
+              )}
               <WeekGrid schedule={current} lookups={lookups} highlightTeacherId={user.teacherId} onlyMine={onlyMine && !!user.teacherId} />
+              {isCoordinator && <History schedule={current} />}
             </div>
           )}
         </div>
