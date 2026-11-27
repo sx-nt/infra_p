@@ -54,6 +54,20 @@ def sam_routes():
     }
 
 
+def test_openapi_documents_every_route():
+    spec = yaml.safe_load((HERE.parent.parent / "docs" / "openapi.yaml").read_text())
+    documented = {
+        (method.upper(), path)
+        for path, operations in spec["paths"].items()
+        for method in operations if method in ("get", "post", "put", "delete")
+    }
+    routes = {tuple(route.split(" ", 1)) for route in sam_routes()}
+    for method, path in documented:
+        assert (method, path) in routes or ("ANY", path) in routes, f"{method} {path} documentado sem rota"
+    for method, path in routes:
+        assert any(p == path and (method == "ANY" or m == method) for m, p in documented), f"{method} {path} sem documentação"
+
+
 def test_routes_match_local_sam_template(stack):
     routes = {r["inputs"]["routeKey"] for r in of_type(stack, "aws:apigatewayv2/route:Route")}
     assert routes == sam_routes()
@@ -73,11 +87,35 @@ def test_jwt_authorizer_trusts_only_the_user_pool_client(stack):
 
 
 def test_lambdas_use_python_and_shared_code(stack):
-    functions = of_type(stack, "aws:lambda/function:Function")
-    assert len(functions) == 8
-    for fn in functions:
-        assert fn["inputs"]["runtime"] == "python3.12"
-        assert fn["inputs"]["environment"]["variables"]["ADMIN_EMAILS"] == "coordenacao@classly.test"
+    functions = {f["name"]: f["inputs"] for f in of_type(stack, "aws:lambda/function:Function")}
+    assert len(functions) == 9
+    for name, fn in functions.items():
+        assert fn["runtime"] == "python3.12"
+        if name != "classly-login-audit":
+            assert fn["environment"]["variables"]["ADMIN_EMAILS"] == "coordenacao@classly.test"
+            assert fn["environment"]["variables"]["AUDIT_TABLE"] == "classly-audit"
+
+
+def test_logins_are_audited_by_cognito_trigger(stack):
+    pool = one(stack, "aws:cognito/userPool:UserPool")
+    assert pool["lambdaConfig"]["postAuthentication"] == "arn:aws:mock:::classly-login-audit"
+    permission = [p for p in of_type(stack, "aws:lambda/permission:Permission") if p["name"] == "classly-login-audit-cognito-permission"]
+    assert permission[0]["inputs"]["principal"] == "cognito-idp.amazonaws.com"
+
+
+def test_api_access_log_records_rejected_requests(stack):
+    stage = one(stack, "aws:apigatewayv2/stage:Stage")
+    log_format = json.loads(stage["accessLogSettings"]["format"])
+    assert log_format["status"] == "$context.status"
+    assert log_format["authorizerError"] == "$context.authorizer.error"
+
+
+def test_budget_alert_only_in_prod():
+    assert of_type("dev", "aws:budgets/budget:Budget") == []
+    budget = one("prod", "aws:budgets/budget:Budget")
+    assert (budget["limitAmount"], budget["timeUnit"]) == ("5", "MONTHLY")
+    assert {n["threshold"] for n in budget["notifications"]} == {50, 80, 100}
+    assert budget["notifications"][0]["subscriberEmailAddresses"] == ["coordenacao@classly.test"]
 
 
 def test_lambda_permissions_are_scoped_to_tables(stack):
@@ -127,12 +165,15 @@ def test_frontend_files_and_runtime_config_are_uploaded(stack):
     assets = [k for k in objects if k.startswith("assets/")]
     assert any(k.endswith(".js") for k in assets) and any(k.endswith(".css") for k in assets)
     assert all("immutable" in objects[k]["cacheControl"] for k in assets)
+    assert objects["api-docs/openapi.yaml"]["contentType"] == "application/yaml"
+    assert objects["api-docs/index.html"]["contentType"] == "text/html"
 
     config = json.loads(objects["config.json"]["content"])
     url = "https://classly.test" if stack == "prod" else "https://d111111abcdef8.cloudfront.net"
     assert config["apiBase"] == "/api"
     assert config["auth"]["redirectUri"] == f"{url}/"
     assert config["auth"]["clientId"] == "classly-web-id"
+    assert config["googleClientId"] is None
     assert re.fullmatch(rf"https://classly-{stack}-123456789012\.auth\.sa-east-1\.amazoncognito\.com", config["auth"]["domain"])
 
 

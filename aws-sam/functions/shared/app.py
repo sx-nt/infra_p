@@ -1,4 +1,4 @@
-"""API serverless do Classly: dados acadêmicos, usuários, validação e publicação de grades."""
+"""API serverless do Classly: dados acadêmicos, usuários, auditoria e ciclo de vida das grades."""
 
 import json
 import os
@@ -11,6 +11,8 @@ import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 
+from shared import generator, google_calendar
+
 
 TABLES = {
     "teachers": os.environ.get("TEACHERS_TABLE", "TeachersTable"),
@@ -20,6 +22,7 @@ TABLES = {
     "availability": os.environ.get("AVAILABILITY_TABLE", "AvailabilityTable"),
     "schedules": os.environ.get("SCHEDULES_TABLE", "SchedulesTable"),
     "users": os.environ.get("USERS_TABLE", "UsersTable"),
+    "audit": os.environ.get("AUDIT_TABLE", "AuditTable"),
 }
 
 WEEKDAYS = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"}
@@ -29,6 +32,11 @@ WEEKDAY_NAMES = {
     "FRI": "Sexta", "SAT": "Sábado", "SUN": "Domingo",
 }
 ROLES = ("COORDINATOR", "TEACHER", "PENDING")
+# Ciclo de vida: Rascunho -> Em validação -> Aprovada -> Publicada (-> Arquivada).
+STATUS_NAMES = {
+    "DRAFT": "Rascunho", "IN_REVIEW": "Em validação", "APPROVED": "Aprovada",
+    "PUBLISHED": "Publicada", "ARCHIVED": "Arquivada",
+}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -296,6 +304,10 @@ def _current_user(event):
 
     if user != original:
         table.put_item(Item=user)
+        if original is None:
+            _audit(user, "USER_CREATED", "user", user["userId"], {"role": user["role"]})
+        elif original.get("role") != user["role"]:
+            _audit(user, "ROLE_ASSIGNED", "user", user["userId"], {"from": original.get("role"), "to": user["role"]})
     return user
 
 
@@ -304,9 +316,45 @@ def _require(user, *roles):
         raise Forbidden()
 
 
+# --- Auditoria ---
+
+def _audit(user, action, entity, entity_id, details=None):
+    """Registra uma operação crítica. Falhas no registro nunca desfazem a operação."""
+    now = datetime.now(timezone.utc)
+    item = {
+        # Microssegundos no identificador mantêm a ordem de operações no mesmo segundo.
+        "auditId": f"{now.strftime('%Y-%m-%dT%H:%M:%S.%fZ')}#{uuid.uuid4().hex[:8]}",
+        "at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "userId": (user or {}).get("userId", "system"), "email": (user or {}).get("email", "system"),
+        "action": action, "entity": entity, "entityId": str(entity_id),
+    }
+    if details:
+        item["details"] = details
+    try:
+        _db().Table(TABLES["audit"]).put_item(Item=item)
+    except Exception as error:  # noqa: BLE001 - a auditoria não pode derrubar a requisição
+        print(json.dumps({"event": "audit_error", "action": action, "error": str(error)}))
+    print(json.dumps({"event": "audit", **item}, default=str))
+    return item
+
+
+def _audit_list(event):
+    params = event.get("queryStringParameters") or {}
+    items = _items(TABLES["audit"])
+    for field in ("entity", "action", "email"):
+        if params.get(field):
+            items = [i for i in items if i.get(field) == params[field]]
+    items.sort(key=lambda i: i["auditId"], reverse=True)
+    try:
+        limit = max(1, min(int(params.get("limit", 200)), 1000))
+    except ValueError:
+        raise ValueError("limit deve ser um número inteiro.")
+    return items[:limit]
+
+
 # --- Notificações ---
 
-def _notify_publication(schedule):
+def _notify(schedule, teacher_ids=None):
     """Envia a cada professor da grade publicada seus horários (Amazon SES)."""
     sender = os.environ.get("SENDER_EMAIL")
     if not sender:
@@ -316,7 +364,8 @@ def _notify_publication(schedule):
     classes = {c["classId"]: c for c in _items(TABLES["classes"])}
     by_teacher = {}
     for allocation in schedule["allocations"]:
-        by_teacher.setdefault(allocation["teacherId"], []).append(allocation)
+        if teacher_ids is None or allocation["teacherId"] in teacher_ids:
+            by_teacher.setdefault(allocation["teacherId"], []).append(allocation)
 
     ses = boto3.client("sesv2")
     app_url = os.environ.get("APP_URL", "")
@@ -356,6 +405,149 @@ def _notify_publication(schedule):
     return {"sent": sent, "failed": failed}
 
 
+# --- Grades ---
+
+def _schedule_or_404(schedule_id, user):
+    schedule = _get(TABLES["schedules"], {"scheduleId": schedule_id})
+    visible = schedule and (user["role"] == "COORDINATOR" or schedule.get("status") == "PUBLISHED")
+    return schedule if visible else None
+
+
+def _transition(schedule, user, status, **fields):
+    """Muda o estado da grade registrando histórico e auditoria."""
+    entry = {"status": status, "at": _now(), "by": user["email"]}
+    if fields.get("reason"):
+        entry["reason"] = fields["reason"]
+    previous = schedule["status"]
+    schedule["status"] = status
+    schedule.setdefault("history", []).append(entry)
+    _audit(user, f"SCHEDULE_{status}", "schedule", schedule["scheduleId"],
+           {"term": schedule["term"], "version": schedule.get("version"), "from": previous, **fields})
+
+
+def _conflicts(schedule):
+    _, errors = _validate_schedule({"term": schedule["term"], "allocations": schedule["allocations"]})
+    return errors
+
+
+def _schedule_action(event, user, schedule, action):
+    """Ações do ciclo de vida: submit, approve, reject, publish e notify."""
+    table = _db().Table(TABLES["schedules"])
+    expected = {"submit": ("DRAFT",), "approve": ("IN_REVIEW",), "reject": ("IN_REVIEW", "APPROVED"),
+                "publish": ("APPROVED",), "notify": ("PUBLISHED",)}[action]
+    if schedule["status"] not in expected:
+        allowed = " ou ".join(STATUS_NAMES[s] for s in expected)
+        return _response(409, {"message": f"Esta ação exige uma grade em: {allowed}."})
+
+    # Os dados podem ter mudado desde o rascunho: toda etapa de avanço revalida.
+    if action in ("submit", "approve", "publish"):
+        errors = _conflicts(schedule)
+        if errors:
+            return _response(422, {"message": "A grade contém conflitos.", "errors": errors})
+
+    if action == "submit":
+        _transition(schedule, user, "IN_REVIEW")
+    elif action == "approve":
+        schedule.update({"approvedAt": _now(), "approvedBy": user["email"]})
+        _transition(schedule, user, "APPROVED")
+    elif action == "reject":
+        reason = str(_body(event).get("reason", "")).strip()
+        if not reason:
+            raise ValueError("Informe o motivo da devolução (reason).")
+        _transition(schedule, user, "DRAFT", reason=reason)
+    elif action == "publish":
+        previous = _items(TABLES["schedules"], FilterExpression=Attr("term").eq(schedule["term"]) & Attr("status").eq("PUBLISHED"))
+        for old in previous:
+            _transition(old, user, "ARCHIVED", replacedBy=schedule["scheduleId"])
+            table.put_item(Item=old)
+        schedule.update({"publishedAt": _now(), "publishedBy": user["email"]})
+        _transition(schedule, user, "PUBLISHED")
+        schedule["notification"] = _notify(schedule)
+        _audit(user, "NOTIFICATION_SENT", "schedule", schedule["scheduleId"], schedule["notification"])
+    elif action == "notify":
+        # Reenvia aos professores que falharam (ou a todos com {"all": true}).
+        resend_all = _body(event).get("all") is True
+        previous = schedule.get("notification") or {"sent": 0, "failed": []}
+        targets = None if resend_all else {f["teacherId"] for f in previous.get("failed", [])}
+        if targets == set():
+            return _response(409, {"message": "Não há envios com falha para reenviar."})
+        result = _notify(schedule, targets)
+        schedule["notification"] = {
+            "sent": (0 if resend_all else int(previous.get("sent", 0))) + result["sent"],
+            "failed": result["failed"], "lastAttemptAt": _now(),
+            **({"skipped": result["skipped"]} if result.get("skipped") else {}),
+        }
+        _audit(user, "NOTIFICATION_RESENT", "schedule", schedule["scheduleId"], result)
+
+    table.put_item(Item=schedule)
+    return _response(200, schedule)
+
+
+def _generate(data):
+    term = data.get("term")
+    if not term:
+        raise ValueError("Campos obrigatórios: term")
+    classes = _items(TABLES["classes"], FilterExpression=Attr("term").eq(term))
+    if not classes:
+        raise ValueError(f"Não há turmas cadastradas para o período {term}.")
+    teachers = {t["teacherId"]: t for t in _items(TABLES["teachers"])}
+    subjects = {s["subjectId"]: s for s in _items(TABLES["subjects"])}
+    availability = {}
+    for entry in _items(TABLES["availability"]):
+        availability.setdefault(entry["teacherId"], []).append(entry)
+    days = data.get("days")
+    if days is not None and (not isinstance(days, list) or not set(days) <= WEEKDAYS or not days):
+        raise ValueError("days deve ser uma lista de dias (MON a SUN).")
+    slots = data.get("slots")
+    if slots is not None:
+        if not isinstance(slots, list) or not slots:
+            raise ValueError("slots deve ser uma lista de {start, end}.")
+        parsed = []
+        for slot in slots:
+            _, start, end = _interval({"day": "MON", **slot})
+            parsed.append((start.strftime("%H:%M"), end.strftime("%H:%M")))
+        slots = parsed
+    allocations, unresolved = generator.generate(
+        classes, subjects, teachers, _items(TABLES["qualifications"]), availability, days, slots,
+    )
+    _, errors = _validate_schedule({"term": term, "allocations": allocations}) if allocations else ([], [])
+    return {"term": term, "allocations": allocations, "unresolved": unresolved, "errors": errors}
+
+
+# --- Disponibilidade ---
+
+def _normalize_availability(teacher_id, entries):
+    if not isinstance(entries, list):
+        raise ValueError("availability precisa ser uma lista.")
+    normalized = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Cada restrição precisa ser um objeto.")
+        day, start, end = _interval(entry)
+        kind = entry.get("type", "BLOCKED")
+        if kind not in ("BLOCKED", "AVAILABLE"):
+            raise ValueError("type deve ser BLOCKED ou AVAILABLE.")
+        origin = entry.get("origin", "MANUAL")
+        if origin not in ("MANUAL", "GOOGLE"):
+            raise ValueError("origin deve ser MANUAL ou GOOGLE.")
+        normalized.append({
+            "teacherId": teacher_id, "availabilityId": str(uuid.uuid4()),
+            "day": day, "start": start.strftime("%H:%M"),
+            "end": end.strftime("%H:%M"), "type": kind, "origin": origin,
+        })
+    return normalized
+
+
+def _replace_availability(teacher_id, normalized):
+    table = _db().Table(TABLES["availability"])
+    old = table.query(KeyConditionExpression=Key("teacherId").eq(teacher_id)).get("Items", [])
+    with table.batch_writer() as batch:
+        for item in old:
+            batch.delete_item(Key={"teacherId": teacher_id, "availabilityId": item["availabilityId"]})
+        for item in normalized:
+            batch.put_item(Item=item)
+
+
 # --- Roteamento ---
 
 COLLECTIONS = {
@@ -363,6 +555,7 @@ COLLECTIONS = {
     "subjects": ("subjectId", ("code", "name", "weeklyHours")),
     "classes": ("classId", ("code", "term", "subjectId")),
 }
+SCHEDULE_ACTIONS = ("submit", "approve", "reject", "publish", "notify")
 
 
 def _route(event, method, parts):
@@ -378,6 +571,10 @@ def _route(event, method, parts):
         _require(user, "COORDINATOR")
         return _response(200, sorted(_items(TABLES["users"]), key=lambda u: u.get("email", "")))
 
+    if parts == ["audit"] and method == "GET":
+        _require(user, "COORDINATOR")
+        return _response(200, _audit_list(event))
+
     if len(parts) == 3 and parts[0] == "users" and parts[2] == "role" and method == "PUT":
         _require(user, "COORDINATOR")
         role = _body(event).get("role")
@@ -389,8 +586,10 @@ def _route(event, method, parts):
         target = table.get_item(Key={"userId": parts[1]}).get("Item")
         if not target:
             return _response(404, {"message": "Usuário não encontrado."})
+        previous = target["role"]
         target["role"] = role
         table.put_item(Item=target)
+        _audit(user, "ROLE_CHANGED", "user", target["userId"], {"email": target["email"], "from": previous, "to": role})
         return _response(200, target)
 
     if user["role"] == "PENDING":
@@ -409,6 +608,7 @@ def _route(event, method, parts):
                 item = _create_entity(id_key, fields, data)
             except DuplicateResourceError as error:
                 return _response(409, {"message": str(error)})
+            _audit(user, "CREATE", parts[0], item[id_key], item)
             return _response(201, item)
 
     if len(parts) == 2 and parts[0] in COLLECTIONS:
@@ -426,6 +626,7 @@ def _route(event, method, parts):
             if name == "subjects" and _items(TABLES["classes"], FilterExpression=Attr("subjectId").eq(parts[1])):
                 return _response(409, {"message": "A disciplina está associada a uma turma."})
             table.delete_item(Key=key)
+            _audit(user, "DELETE", name, parts[1], existing)
             return _response(204)
         if method == "PUT":
             data = _body(event)
@@ -433,6 +634,7 @@ def _route(event, method, parts):
             _normalize(name, data)
             updated = {**{field: data[field] for field in fields}, id_key: parts[1]}
             table.put_item(Item=updated)
+            _audit(user, "UPDATE", name, parts[1], {"before": existing, "after": updated})
             return _response(200, updated)
 
     if parts == ["qualifications"] and method == "GET":
@@ -445,8 +647,10 @@ def _route(event, method, parts):
             if not _get(TABLES["teachers"], {"teacherId": teacher_id}) or not _get(TABLES["subjects"], {"subjectId": subject_id}):
                 return _response(404, {"message": "Professor ou disciplina não encontrado."})
             table = _db().Table(TABLES["qualifications"])
+            entity_id = f"{teacher_id}/{subject_id}"
             if method == "DELETE":
                 table.delete_item(Key={"teacherId": teacher_id, "subjectId": subject_id})
+                _audit(user, "DELETE", "qualifications", entity_id)
                 return _response(204)
             data = _body(event)
             enabled = data.get("enabled", True)
@@ -454,9 +658,10 @@ def _route(event, method, parts):
                 raise ValueError("enabled deve ser booleano.")
             qualification = {"teacherId": teacher_id, "subjectId": subject_id, "enabled": enabled}
             table.put_item(Item=qualification)
+            _audit(user, "UPDATE", "qualifications", entity_id, {"enabled": enabled})
             return _response(200, qualification)
 
-    if len(parts) == 3 and parts[0] == "teachers" and parts[2] == "availability":
+    if len(parts) in (3, 4) and parts[0] == "teachers" and parts[2] == "availability":
         teacher_id = parts[1]
         # O professor gerencia a própria disponibilidade; a coordenação, a de todos.
         if user["role"] != "COORDINATOR" and user.get("teacherId") != teacher_id:
@@ -464,35 +669,32 @@ def _route(event, method, parts):
         if not _get(TABLES["teachers"], {"teacherId": teacher_id}):
             return _response(404, {"message": "Professor não encontrado."})
         table = _db().Table(TABLES["availability"])
-        if method == "GET":
-            return _response(200, table.query(KeyConditionExpression=Key("teacherId").eq(teacher_id)).get("Items", []))
-        if method == "PUT":
-            data = _body(event)
-            entries = data.get("availability")
-            if not isinstance(entries, list):
-                raise ValueError("availability precisa ser uma lista.")
-            normalized = []
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    raise ValueError("Cada restrição precisa ser um objeto.")
-                day, start, end = _interval(entry)
-                kind = entry.get("type", "BLOCKED")
-                if kind not in ("BLOCKED", "AVAILABLE"):
-                    raise ValueError("type deve ser BLOCKED ou AVAILABLE.")
-                normalized.append({
-                    "teacherId": teacher_id, "availabilityId": str(uuid.uuid4()),
-                    "day": day, "start": start.strftime("%H:%M"),
-                    "end": end.strftime("%H:%M"), "type": kind,
-                    "origin": entry.get("origin", "MANUAL"),
-                    **({"externalEventId": entry["externalEventId"]} if entry.get("externalEventId") else {}),
-                })
-            old = table.query(KeyConditionExpression=Key("teacherId").eq(teacher_id)).get("Items", [])
-            with table.batch_writer() as batch:
-                for item in old:
-                    batch.delete_item(Key={"teacherId": teacher_id, "availabilityId": item["availabilityId"]})
-                for item in normalized:
-                    batch.put_item(Item=item)
+        current = table.query(KeyConditionExpression=Key("teacherId").eq(teacher_id)).get("Items", [])
+
+        if len(parts) == 3 and method == "GET":
+            return _response(200, current)
+        if len(parts) == 3 and method == "PUT":
+            normalized = _normalize_availability(teacher_id, _body(event).get("availability"))
+            _replace_availability(teacher_id, normalized)
+            _audit(user, "UPDATE", "availability", teacher_id, {"entries": len(normalized)})
             return _response(200, {"teacherId": teacher_id, "availability": normalized})
+        if parts[3:] == ["google"] and method == "POST":
+            token = _body(event).get("accessToken")
+            if not token:
+                raise ValueError("Campos obrigatórios: accessToken")
+            try:
+                imported = google_calendar.weekly_restrictions(google_calendar.fetch_busy(token))
+            except google_calendar.CalendarError as error:
+                return _response(502, {"message": str(error)})
+            # Mantém o que foi informado manualmente e substitui a importação anterior.
+            manual = [e for e in current if e.get("origin", "MANUAL") != "GOOGLE"]
+            normalized = _normalize_availability(teacher_id, manual + imported)
+            _replace_availability(teacher_id, normalized)
+            _audit(user, "CALENDAR_SYNC", "availability", teacher_id, {"imported": len(imported)})
+            message = (f"{len(imported)} compromisso(s) semanal(is) importado(s) do Google Calendar."
+                       if imported else "Nenhum compromisso semanal recorrente encontrado nas próximas 4 semanas.")
+            return _response(200, {"teacherId": teacher_id, "imported": len(imported),
+                                   "message": message, "availability": normalized})
 
     if parts == ["schedules"] and method == "GET":
         if user["role"] == "COORDINATOR":
@@ -506,6 +708,10 @@ def _route(event, method, parts):
         allocations, errors = _validate_schedule(_body(event))
         return _response(200, {"valid": not errors, "allocations": allocations, "errors": errors})
 
+    if parts == ["schedules", "generate"] and method == "POST":
+        _require(user, "COORDINATOR")
+        return _response(200, _generate(_body(event)))
+
     if parts == ["schedules"] and method == "POST":
         _require(user, "COORDINATOR")
         data = _body(event)
@@ -514,49 +720,48 @@ def _route(event, method, parts):
         if errors:
             return _response(422, {"message": "A grade contém conflitos.", "errors": errors})
         versions = _items(TABLES["schedules"], FilterExpression=Attr("term").eq(data["term"]))
+        now = _now()
         schedule = {
             "scheduleId": str(uuid.uuid4()), "term": data["term"],
             "status": "DRAFT", "version": max([int(s.get("version", 0)) for s in versions] + [0]) + 1,
-            "createdAt": _now(), "createdBy": user["email"],
+            "createdAt": now, "createdBy": user["email"],
             "allocations": allocations,
+            "history": [{"status": "DRAFT", "at": now, "by": user["email"]}],
         }
         _db().Table(TABLES["schedules"]).put_item(Item=schedule)
+        _audit(user, "CREATE", "schedule", schedule["scheduleId"], {"term": schedule["term"], "version": schedule["version"]})
         return _response(201, schedule)
 
     if len(parts) == 2 and parts[0] == "schedules":
-        table = _db().Table(TABLES["schedules"])
-        schedule = table.get_item(Key={"scheduleId": parts[1]}).get("Item")
-        visible = schedule and (user["role"] == "COORDINATOR" or schedule.get("status") == "PUBLISHED")
-        if not visible:
+        schedule = _schedule_or_404(parts[1], user)
+        if not schedule:
             return _response(404, {"message": "Grade não encontrada."})
         if method == "GET":
             return _response(200, schedule)
-        if method == "DELETE":
-            _require(user, "COORDINATOR")
-            if schedule["status"] != "DRAFT":
-                return _response(409, {"message": "Somente rascunhos podem ser excluídos."})
-            table.delete_item(Key={"scheduleId": parts[1]})
-            return _response(204)
-
-    if len(parts) == 3 and parts[0] == "schedules" and parts[2] == "publish" and method == "POST":
         _require(user, "COORDINATOR")
         table = _db().Table(TABLES["schedules"])
-        schedule = table.get_item(Key={"scheduleId": parts[1]}).get("Item")
+        if schedule["status"] != "DRAFT":
+            return _response(409, {"message": "Somente rascunhos podem ser alterados ou excluídos."})
+        if method == "DELETE":
+            table.delete_item(Key={"scheduleId": parts[1]})
+            _audit(user, "DELETE", "schedule", parts[1], {"term": schedule["term"], "version": schedule.get("version")})
+            return _response(204)
+        if method == "PUT":
+            # Ajuste manual do rascunho: a grade publicada nunca muda silenciosamente.
+            allocations, errors = _validate_schedule({"term": schedule["term"], "allocations": _body(event).get("allocations")})
+            if errors:
+                return _response(422, {"message": "A grade contém conflitos.", "errors": errors})
+            schedule.update({"allocations": allocations, "updatedAt": _now(), "updatedBy": user["email"]})
+            table.put_item(Item=schedule)
+            _audit(user, "UPDATE", "schedule", parts[1], {"term": schedule["term"], "allocations": len(allocations)})
+            return _response(200, schedule)
+
+    if len(parts) == 3 and parts[0] == "schedules" and parts[2] in SCHEDULE_ACTIONS and method == "POST":
+        _require(user, "COORDINATOR")
+        schedule = _schedule_or_404(parts[1], user)
         if not schedule:
             return _response(404, {"message": "Grade não encontrada."})
-        if schedule["status"] != "DRAFT":
-            return _response(409, {"message": "Somente rascunhos podem ser publicados."})
-        # RN07: os dados podem ter mudado desde o rascunho; valida novamente.
-        _, errors = _validate_schedule({"term": schedule["term"], "allocations": schedule["allocations"]})
-        if errors:
-            return _response(422, {"message": "A grade contém conflitos.", "errors": errors})
-        for previous in _items(TABLES["schedules"], FilterExpression=Attr("term").eq(schedule["term"]) & Attr("status").eq("PUBLISHED")):
-            previous["status"] = "ARCHIVED"
-            table.put_item(Item=previous)
-        schedule.update({"status": "PUBLISHED", "publishedAt": _now(), "publishedBy": user["email"]})
-        schedule["notification"] = _notify_publication(schedule)
-        table.put_item(Item=schedule)
-        return _response(200, schedule)
+        return _schedule_action(event, user, schedule, parts[2])
 
     return _response(404, {"message": "Rota não encontrada."})
 
@@ -578,3 +783,11 @@ def handler(event, context):
     except Exception as error:  # Keep API Gateway responses useful while Lambda logs retain the traceback.
         print(json.dumps({"event": "api_error", "path": path, "error": str(error)}))
         return _response(500, {"message": "Erro interno ao processar a solicitação."})
+
+
+def login_event_handler(event, context):
+    """Gatilho pós-autenticação do Cognito: registra cada login na auditoria."""
+    attributes = event.get("request", {}).get("userAttributes", {})
+    user = {"userId": attributes.get("sub", event.get("userName", "")), "email": attributes.get("email", "")}
+    _audit(user, "LOGIN", "user", user["userId"], {"source": event.get("triggerSource")})
+    return event

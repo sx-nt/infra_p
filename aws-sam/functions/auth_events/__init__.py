@@ -1,0 +1,1 @@
+"""Cognito post-authentication trigger."""

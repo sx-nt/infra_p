@@ -57,8 +57,14 @@ def test_complete_term_from_registration_to_publication(api):
     conflicting[1]["day"] = "WED"
     status, draft = api("POST", "/schedules", {"term": "2026.2", "allocations": conflicting})
     assert status == 201 and draft["version"] == 1
-    status, published = api("POST", f"/schedules/{draft['scheduleId']}/publish")
-    assert status == 200 and published["status"] == "PUBLISHED"
+    for action, expected in (("submit", "IN_REVIEW"), ("approve", "APPROVED"), ("publish", "PUBLISHED")):
+        status, current = api("POST", f"/schedules/{draft['scheduleId']}/{action}")
+        assert status == 200 and current["status"] == expected
+
+    # Todas as operações críticas ficaram registradas na auditoria.
+    _, audit = api("GET", "/audit")
+    recorded = {item["action"] for item in audit}
+    assert {"CREATE", "UPDATE", "SCHEDULE_IN_REVIEW", "SCHEDULE_APPROVED", "SCHEDULE_PUBLISHED"} <= recorded
 
     # Professores enxergam a grade publicada; quem não foi liberado, não.
     _, visible = api("GET", "/schedules", email=TEACHER)
@@ -70,6 +76,21 @@ def test_complete_term_from_registration_to_publication(api):
     pending = [u for u in api("GET", "/users")[1] if u["email"] == STRANGER][0]
     api("PUT", f"/users/{pending['userId']}/role", {"role": "TEACHER"})
     assert api("GET", "/schedules", email=STRANGER)[0] == 200
+
+
+def test_generated_schedule_goes_through_the_whole_lifecycle(api):
+    _, teacher = api("POST", "/teachers", {"name": "Ana Souza", "email": TEACHER})
+    _, subject = api("POST", "/subjects", {"code": "ISN", "name": "Infraestrutura", "weeklyHours": 3})
+    api("POST", "/classes", {"code": "ADS-5", "term": "2027.1", "subjectId": subject["subjectId"]})
+    api("PUT", f"/teachers/{teacher['teacherId']}/subjects/{subject['subjectId']}", {"enabled": True})
+
+    status, proposal = api("POST", "/schedules/generate", {"term": "2027.1"})
+    assert status == 200 and proposal["errors"] == [] and proposal["unresolved"] == []
+    status, draft = api("POST", "/schedules", {"term": "2027.1", "allocations": proposal["allocations"]})
+    assert status == 201
+    for action in ("submit", "approve", "publish"):
+        assert api("POST", f"/schedules/{draft['scheduleId']}/{action}")[0] == 200
+    assert len(api("GET", "/schedules", email=TEACHER)[1]) == 1
 
 
 def test_routes_not_in_template_return_404(api):

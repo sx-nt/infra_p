@@ -30,7 +30,7 @@
       }
     },
     {
-      "Sid": "LambdaLogGroups",
+      "Sid": "LogGroups",
       "Effect": "Allow",
       "Action": [
         "logs:CreateLogGroup",
@@ -43,7 +43,14 @@
         "logs:TagResource",
         "logs:UntagResource",
         "logs:TagLogGroup",
-        "logs:UntagLogGroup"
+        "logs:UntagLogGroup",
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies"
       ],
       "Resource": "*"
     },
@@ -62,6 +69,18 @@
         "route53:GetChange",
         "route53:ListTagsForResource",
         "route53:ChangeTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CostBudget",
+      "Effect": "Allow",
+      "Action": [
+        "budgets:ModifyBudget",
+        "budgets:ViewBudget",
+        "budgets:ListTagsForResource",
+        "budgets:TagResource",
+        "budgets:UntagResource"
       ],
       "Resource": "*"
     }

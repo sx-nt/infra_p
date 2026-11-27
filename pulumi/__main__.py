@@ -57,6 +57,7 @@ TABLE_KEYS = {
     "availability": ("teacherId", "availabilityId"),
     "schedules": ("scheduleId", None),
     "users": ("userId", None),
+    "audit": ("auditId", None),
 }
 
 tables = {}
@@ -75,8 +76,29 @@ for name, (hash_key, range_key) in TABLE_KEYS.items():
 # --- API Gateway (HTTP API) ---
 api = aws.apigatewayv2.Api("classly-api", protocol_type="HTTP", tags=tags)
 
+# Log de acesso de toda requisição à API, inclusive as recusadas pelo
+# autorizador (401): registra tentativas de acesso sem autenticação válida.
+api_access_logs = aws.cloudwatch.LogGroup(
+    "classly-api-access-logs", retention_in_days=LOG_RETENTION_DAYS, tags=tags
+)
 aws.apigatewayv2.Stage(
-    "classly-stage", api_id=api.id, name="$default", auto_deploy=True, tags=tags
+    "classly-stage",
+    api_id=api.id,
+    name="$default",
+    auto_deploy=True,
+    access_log_settings=aws.apigatewayv2.StageAccessLogSettingsArgs(
+        destination_arn=api_access_logs.arn,
+        format=json.dumps({
+            "requestId": "$context.requestId",
+            "time": "$context.requestTime",
+            "ip": "$context.identity.sourceIp",
+            "route": "$context.routeKey",
+            "status": "$context.status",
+            "authorizerError": "$context.authorizer.error",
+            "user": "$context.authorizer.claims.email",
+        }),
+    ),
+    tags=tags,
 )
 
 # --- Frontend: bucket privado lido apenas pelo CloudFront (OAC) ---
@@ -248,6 +270,94 @@ aws.s3.BucketPolicy(
     ),
 )
 
+# --- Lambdas ---
+LAMBDA_ASSUME_ROLE = json.dumps(
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {"Service": "lambda.amazonaws.com"},
+                "Action": "sts:AssumeRole",
+            }
+        ],
+    }
+)
+
+DYNAMODB_ACTIONS = [
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+    "dynamodb:DeleteItem",
+    "dynamodb:Query",
+    "dynamodb:Scan",
+    "dynamodb:BatchWriteItem",
+]
+
+
+def lambda_function(name, handler, table_names, environment, send_email=False):
+    """Função com papel próprio (menor privilégio): logs, tabelas e, se preciso, SES."""
+    role = aws.iam.Role(f"{name}-role", assume_role_policy=LAMBDA_ASSUME_ROLE, tags=tags)
+    aws.iam.RolePolicyAttachment(
+        f"{name}-logs",
+        role=role.name,
+        policy_arn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+    )
+    if table_names:
+        aws.iam.RolePolicy(
+            f"{name}-dynamodb",
+            role=role.id,
+            policy=pulumi.Output.all(*[tables[t].arn for t in table_names]).apply(
+                lambda arns: json.dumps(
+                    {
+                        "Version": "2012-10-17",
+                        "Statement": [
+                            {"Effect": "Allow", "Action": DYNAMODB_ACTIONS, "Resource": arns}
+                        ],
+                    }
+                )
+            ),
+        )
+    if send_email:
+        aws.iam.RolePolicy(
+            f"{name}-ses",
+            role=role.id,
+            policy=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [{"Effect": "Allow", "Action": "ses:SendEmail", "Resource": "*"}],
+                }
+            ),
+        )
+
+    log_group = aws.cloudwatch.LogGroup(
+        f"{name}-log-group", retention_in_days=LOG_RETENTION_DAYS, tags=tags
+    )
+    return aws.lambda_.Function(
+        name,
+        role=role.arn,
+        runtime=aws.lambda_.Runtime.PYTHON3D12,
+        handler=handler,
+        code=pulumi.FileArchive(str(FUNCTIONS_DIR)),
+        timeout=20,
+        memory_size=256,
+        environment=environment,
+        logging_config=aws.lambda_.FunctionLoggingConfigArgs(
+            log_format="Text", log_group=log_group.name
+        ),
+        tags=tags,
+    )
+
+
+# Gatilho pós-autenticação: cada login no Cognito vira um registro de auditoria.
+login_audit_fn = lambda_function(
+    "classly-login-audit",
+    "auth_events.handler.handler",
+    ["audit"],
+    aws.lambda_.FunctionEnvironmentArgs(variables={"AUDIT_TABLE": tables["audit"].name}),
+)
+
+
 # --- Cognito: base de usuários, verificação por e-mail e login gerenciado ---
 user_pool = aws.cognito.UserPool(
     "classly-users",
@@ -289,7 +399,16 @@ user_pool = aws.cognito.UserPool(
         email_sending_account="COGNITO_DEFAULT"
     ),
     deletion_protection="ACTIVE" if is_prod else "INACTIVE",
+    lambda_config=aws.cognito.UserPoolLambdaConfigArgs(post_authentication=login_audit_fn.arn),
     tags=tags,
+)
+
+aws.lambda_.Permission(
+    "classly-login-audit-cognito-permission",
+    function=login_audit_fn.name,
+    action="lambda:InvokeFunction",
+    principal="cognito-idp.amazonaws.com",
+    source_arn=user_pool.arn,
 )
 
 auth_domain = aws.cognito.UserPoolDomain(
@@ -302,7 +421,9 @@ auth_domain = aws.cognito.UserPoolDomain(
 identity_providers = ["COGNITO"]
 idp_resources = []
 google_client_id = config.get("googleClientId")
-if google_client_id:
+google_client_secret = config.get_secret("googleClientSecret")
+# O ID do cliente basta para importar a agenda; o login com Google precisa também do segredo.
+if google_client_id and google_client_secret:
     idp_resources.append(
         aws.cognito.IdentityProvider(
             "classly-google",
@@ -311,7 +432,7 @@ if google_client_id:
             provider_type="Google",
             provider_details={
                 "client_id": google_client_id,
-                "client_secret": config.require_secret("googleClientSecret"),
+                "client_secret": google_client_secret,
                 "authorize_scopes": "openid email profile",
             },
             attribute_mapping={
@@ -387,30 +508,6 @@ elif config.get("senderEmail"):
     aws.sesv2.EmailIdentity("classly-email", email_identity=config.get("senderEmail"), tags=tags)
     sender_email = config.get("senderEmail")
 
-# --- Lambdas ---
-LAMBDA_ASSUME_ROLE = json.dumps(
-    {
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Principal": {"Service": "lambda.amazonaws.com"},
-                "Action": "sts:AssumeRole",
-            }
-        ],
-    }
-)
-
-DYNAMODB_ACTIONS = [
-    "dynamodb:GetItem",
-    "dynamodb:PutItem",
-    "dynamodb:UpdateItem",
-    "dynamodb:DeleteItem",
-    "dynamodb:Query",
-    "dynamodb:Scan",
-    "dynamodb:BatchWriteItem",
-]
-
 function_env = aws.lambda_.FunctionEnvironmentArgs(
     variables={
         **{f"{name.upper()}_TABLE": table.name for name, table in tables.items()},
@@ -422,63 +519,14 @@ function_env = aws.lambda_.FunctionEnvironmentArgs(
 
 
 def api_function(name, handler, routes, table_names=(), public=False, send_email=False):
-    """Cria a função com papel próprio (menor privilégio) e liga suas rotas à API.
+    """Cria a função e liga suas rotas à API.
 
-    Toda rota protegida consulta o perfil do usuário (tabela users) e o vínculo
-    com o professor (tabela teachers).
+    Toda rota protegida consulta o perfil do usuário (tabela users), o vínculo
+    com o professor (tabela teachers) e registra auditoria (tabela audit).
     """
     if not public:
-        table_names = sorted(set(table_names) | {"users", "teachers"})
-    role = aws.iam.Role(f"{name}-role", assume_role_policy=LAMBDA_ASSUME_ROLE, tags=tags)
-    aws.iam.RolePolicyAttachment(
-        f"{name}-logs",
-        role=role.name,
-        policy_arn="arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-    )
-    if table_names:
-        aws.iam.RolePolicy(
-            f"{name}-dynamodb",
-            role=role.id,
-            policy=pulumi.Output.all(*[tables[t].arn for t in table_names]).apply(
-                lambda arns: json.dumps(
-                    {
-                        "Version": "2012-10-17",
-                        "Statement": [
-                            {"Effect": "Allow", "Action": DYNAMODB_ACTIONS, "Resource": arns}
-                        ],
-                    }
-                )
-            ),
-        )
-    if send_email:
-        aws.iam.RolePolicy(
-            f"{name}-ses",
-            role=role.id,
-            policy=json.dumps(
-                {
-                    "Version": "2012-10-17",
-                    "Statement": [{"Effect": "Allow", "Action": "ses:SendEmail", "Resource": "*"}],
-                }
-            ),
-        )
-
-    log_group = aws.cloudwatch.LogGroup(
-        f"{name}-log-group", retention_in_days=LOG_RETENTION_DAYS, tags=tags
-    )
-    fn = aws.lambda_.Function(
-        name,
-        role=role.arn,
-        runtime=aws.lambda_.Runtime.PYTHON3D12,
-        handler=handler,
-        code=pulumi.FileArchive(str(FUNCTIONS_DIR)),
-        timeout=20,
-        memory_size=256,
-        environment=function_env,
-        logging_config=aws.lambda_.FunctionLoggingConfigArgs(
-            log_format="Text", log_group=log_group.name
-        ),
-        tags=tags,
-    )
+        table_names = sorted(set(table_names) | {"users", "teachers", "audit"})
+    fn = lambda_function(name, handler, table_names, function_env, send_email)
 
     integration = aws.apigatewayv2.Integration(
         f"{name}-integration",
@@ -537,7 +585,7 @@ functions = {
     "availability": api_function(
         "classly-availability",
         "availability.handler.handler",
-        ["ANY /teachers/{teacherId}/availability"],
+        ["ANY /teachers/{teacherId}/availability", "POST /teachers/{teacherId}/availability/google"],
         ["availability"],
     ),
     "schedules": api_function(
@@ -547,8 +595,9 @@ functions = {
             "GET /schedules",
             "POST /schedules",
             "POST /schedules/validate",
+            "POST /schedules/generate",
             "ANY /schedules/{scheduleId}",
-            "POST /schedules/{scheduleId}/publish",
+            *[f"POST /schedules/{{scheduleId}}/{action}" for action in ("submit", "approve", "reject", "publish", "notify")],
         ],
         list(TABLE_KEYS),
         send_email=True,
@@ -556,7 +605,7 @@ functions = {
     "users": api_function(
         "classly-users",
         "users.handler.handler",
-        ["GET /me", "GET /users", "PUT /users/{userId}/role"],
+        ["GET /me", "GET /users", "PUT /users/{userId}/role", "GET /audit"],
     ),
     "health": api_function("classly-health", "health.handler.handler", ["GET /health"], public=True),
 }
@@ -567,6 +616,7 @@ functions = {
 subprocess.run(["npm", "ci", "--no-audit", "--no-fund"], cwd=WEB_DIR, check=True)
 subprocess.run(["npm", "run", "build"], cwd=WEB_DIR, check=True)
 
+mimetypes.add_type("application/yaml", ".yaml")
 dist_dir = WEB_DIR / "dist"
 for file_path in sorted(dist_dir.rglob("*")):
     relative = file_path.relative_to(dist_dir).as_posix()
@@ -599,6 +649,8 @@ aws.s3.BucketObject(
                 "logoutUri": app_url,
                 "identityProviders": identity_providers,
             },
+            # Usado pelo botão "Importar do Google Calendar" (Google Identity Services).
+            "googleClientId": google_client_id,
         }
     ),
     content_type="application/json",
@@ -620,6 +672,28 @@ if is_prod:
                 )
             ],
         )
+
+# --- Custos: alerta de orçamento mensal da conta (criado pelo stack prod) ---
+if is_prod:
+    budget_emails = [e.strip() for e in config.require("adminEmails").split(",") if e.strip()]
+    aws.budgets.Budget(
+        "classly-monthly-budget",
+        budget_type="COST",
+        limit_amount=config.get("monthlyBudgetUsd") or "5",
+        limit_unit="USD",
+        time_unit="MONTHLY",
+        notifications=[
+            aws.budgets.BudgetNotificationArgs(
+                comparison_operator="GREATER_THAN",
+                threshold=threshold,
+                threshold_type="PERCENTAGE",
+                notification_type=kind,
+                subscriber_email_addresses=budget_emails,
+            )
+            for threshold, kind in ((50, "ACTUAL"), (80, "ACTUAL"), (100, "FORECASTED"))
+        ],
+        tags=tags,
+    )
 
 pulumi.export("environment", stack)
 if is_prod:

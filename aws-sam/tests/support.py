@@ -10,6 +10,7 @@ TABLE_KEYS = {
     "AvailabilityTable": ["teacherId", "availabilityId"],
     "SchedulesTable": ["scheduleId"],
     "UsersTable": ["userId"],
+    "AuditTable": ["auditId"],
 }
 
 COORDINATOR = "coordenacao@classly.test"

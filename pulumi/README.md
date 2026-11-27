@@ -9,9 +9,11 @@ SAM + DynamoDB Local; o frontend é o build de [`web/`](../web).
 
 | Recurso | dev | prod |
 | --- | --- | --- |
-| DynamoDB: 7 tabelas sob demanda (professores, disciplinas, turmas, habilitações, disponibilidades, grades, usuários) | ✓ | ✓ (com point-in-time recovery) |
+| DynamoDB: 8 tabelas sob demanda (professores, disciplinas, turmas, habilitações, disponibilidades, grades, usuários, auditoria) | ✓ | ✓ (com point-in-time recovery) |
 | Lambda: uma função por domínio, com papel IAM próprio restrito às tabelas que usa | ✓ | ✓ |
-| CloudWatch Logs: um grupo por função, retenção de 14 dias | ✓ | ✓ |
+| CloudWatch Logs: um grupo por função e o log de acesso da API (inclui requisições recusadas pelo autorizador), retenção de 14 dias | ✓ | ✓ |
+| Lambda de auditoria de login (gatilho pós-autenticação do Cognito) | ✓ | ✓ |
+| AWS Budgets: alerta mensal (US$ 5 por padrão; 50%, 80% e previsão de 100%) para os e-mails da coordenação | — | ✓ |
 | API Gateway (HTTP API) com as rotas de [`docs/api.md`](../docs/api.md) e autorizador JWT (exceto `/health`) | ✓ | ✓ |
 | Cognito: base de usuários por e-mail com verificação por código, login gerenciado em português e Google opcional | ✓ | ✓ (com proteção contra exclusão) |
 | S3 privado com o build do frontend, lido só pelo CloudFront (OAC) | ✓ | ✓ |
@@ -32,7 +34,8 @@ em `Authorization: Bearer` e o API Gateway o valida antes de chamar a Lambda.
 | `aws:region` | dev, prod | Região padrão (`sa-east-1`). |
 | `classly:adminEmails` | dev, prod | E-mails (separados por vírgula) que entram como coordenação. |
 | `classly:senderEmail` | dev (opcional) | Remetente das notificações; a AWS envia um link de confirmação para ele. |
-| `classly:googleClientId` / `classly:googleClientSecret` | dev, prod (opcional) | Credenciais OAuth do Google para o botão “Entrar com Google” (o segredo com `--secret`). |
+| `classly:googleClientId` / `classly:googleClientSecret` | dev, prod (opcional) | Cliente OAuth do Google: habilita “Entrar com Google” e “Importar do Google Calendar” (o segredo com `--secret`). |
+| `classly:monthlyBudgetUsd` | prod (opcional) | Limite do alerta de orçamento mensal (padrão `5`). |
 | `classly:domain` | prod | Subdomínio público do sistema (`classly.negoci.online`). |
 
 Antes do primeiro `up` de cada stack:
@@ -78,8 +81,17 @@ pulumi config set classly:googleClientId <id> -s prod
 pulumi config set --secret classly:googleClientSecret <segredo> -s prod
 ```
 
-No Google Cloud Console, o cliente OAuth deve ter como URI de redirecionamento
-autorizado `<login_url>/oauth2/idpresponse`.
+No Google Cloud Console (APIs e serviços):
+
+1. Ative a **Google Calendar API**.
+2. Na **Tela de consentimento OAuth**, inclua o escopo
+   `https://www.googleapis.com/auth/calendar.readonly` e, enquanto o app
+   estiver em teste, os e-mails dos professores como usuários de teste.
+3. Crie um **ID do cliente OAuth** do tipo "Aplicativo da Web" com:
+   - Origens JavaScript autorizadas: a `url` do stack (ex.:
+     `https://classly.negoci.online`), usada pela importação da agenda;
+   - URI de redirecionamento autorizado: `<login_url>/oauth2/idpresponse`,
+     usado pelo login com Google.
 
 ## Execução
 

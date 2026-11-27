@@ -64,6 +64,19 @@ def test_invalid_schedule_is_not_saved(api, catalog):
     assert api("GET", "/schedules")[1] == []
 
 
+def approve(api, schedule_id):
+    """Rascunho -> Em validação -> Aprovada."""
+    assert api("POST", f"/schedules/{schedule_id}/submit")[1]["status"] == "IN_REVIEW"
+    status, approved = api("POST", f"/schedules/{schedule_id}/approve")
+    assert status == 200 and approved["status"] == "APPROVED"
+    return approved
+
+
+def publish(api, schedule_id):
+    approve(api, schedule_id)
+    return api("POST", f"/schedules/{schedule_id}/publish")
+
+
 def save_draft(api, catalog, days=("MON", "WED")):
     status, schedule = api("POST", "/schedules", {"term": "2026.2", "allocations": [
         allocation(catalog, day, "08:00", "10:00") for day in days
@@ -78,17 +91,21 @@ def test_publish_flow_versions_and_visibility(api, catalog):
     assert api("GET", "/schedules", email=TEACHER)[1] == []
     assert api("GET", f"/schedules/{first['scheduleId']}", email=TEACHER)[0] == 404
 
-    status, published = api("POST", f"/schedules/{first['scheduleId']}/publish")
+    status, published = publish(api, first["scheduleId"])
     assert status == 200 and published["status"] == "PUBLISHED"
+    assert [h["status"] for h in published["history"]] == ["DRAFT", "IN_REVIEW", "APPROVED", "PUBLISHED"]
     assert published["notification"]["skipped"]
     assert [s["scheduleId"] for s in api("GET", "/schedules", email=TEACHER)[1]] == [first["scheduleId"]]
     assert api("DELETE", f"/schedules/{first['scheduleId']}")[0] == 409
+    assert api("PUT", f"/schedules/{first['scheduleId']}", {"allocations": []})[0] == 409
     assert api("POST", f"/schedules/{first['scheduleId']}/publish")[0] == 409
 
     second = save_draft(api, catalog, days=("TUE", "THU"))
     assert second["version"] == 2
-    api("POST", f"/schedules/{second['scheduleId']}/publish")
-    assert api("GET", f"/schedules/{first['scheduleId']}")[1]["status"] == "ARCHIVED"
+    publish(api, second["scheduleId"])
+    archived = api("GET", f"/schedules/{first['scheduleId']}")[1]
+    assert archived["status"] == "ARCHIVED"
+    assert archived["history"][-1]["status"] == "ARCHIVED"
 
 
 def test_draft_can_be_deleted(api, catalog):
@@ -99,6 +116,7 @@ def test_draft_can_be_deleted(api, catalog):
 
 def test_publish_revalidates_changed_data(api, catalog):
     draft = save_draft(api, catalog)
+    approve(api, draft["scheduleId"])
     path = f"/teachers/{catalog['teacher']['teacherId']}/subjects/{catalog['subject']['subjectId']}"
     api("PUT", path, {"enabled": False})
     status, body = api("POST", f"/schedules/{draft['scheduleId']}/publish")
@@ -121,7 +139,7 @@ def test_publication_email_lists_teacher_slots(api, catalog, monkeypatch):
 
     monkeypatch.setattr(app.boto3, "client", spy)
     draft = save_draft(api, catalog)
-    _, published = api("POST", f"/schedules/{draft['scheduleId']}/publish")
+    _, published = publish(api, draft["scheduleId"])
 
     assert published["notification"] == {"sent": 1, "failed": []}
     assert sent[0]["Destination"]["ToAddresses"] == [TEACHER]
@@ -134,7 +152,14 @@ def test_email_failure_is_reported_not_raised(api, catalog, monkeypatch):
     # Remetente não verificado: o SES recusa, mas a grade é publicada.
     monkeypatch.setenv("SENDER_EMAIL", "nao-verificado@classly.test")
     draft = save_draft(api, catalog)
-    status, published = api("POST", f"/schedules/{draft['scheduleId']}/publish")
+    status, published = publish(api, draft["scheduleId"])
     assert status == 200 and published["status"] == "PUBLISHED"
     assert published["notification"]["sent"] == 0
     assert published["notification"]["failed"][0]["teacherId"] == catalog["teacher"]["teacherId"]
+
+    # Depois de verificar o remetente, a coordenação reenvia só o que falhou.
+    boto3.client("ses", region_name="us-east-1").verify_email_identity(EmailAddress="nao-verificado@classly.test")
+    status, resent = api("POST", f"/schedules/{draft['scheduleId']}/notify")
+    assert status == 200
+    assert resent["notification"]["sent"] == 1 and resent["notification"]["failed"] == []
+    assert api("POST", f"/schedules/{draft['scheduleId']}/notify")[0] == 409

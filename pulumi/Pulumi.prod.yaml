@@ -2,3 +2,6 @@ config:
   aws:region: sa-east-1
   classly:domain: classly.negoci.online
   classly:adminEmails: isadora.se02@aluno.ifsc.edu.br
+  classly:googleClientId: 206938298453-upsm5inq3fu5huncmps56lbmm6m7jm7u.apps.googleusercontent.com
+  classly:googleClientSecret:
+    secure: AAABAMJaEqI/hpmeYvkwPzCRzlDfTJfx0W1bcRW2lntPrrBrLZOK2iDGzS0TGQuOiL/HPsuEIOKCuR4xtx0Sqw5ZHKE+dY5AsKETC0CS6UhFQ+zDooCuDU918fWoCARnoymRVHgYOpY=
