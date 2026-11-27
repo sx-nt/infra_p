@@ -42,7 +42,7 @@ export default function Qualifications() {
     <section>
       <header className="section-header">
         <h2>Habilitações</h2>
-        <p className="muted">Disciplinas que cada professor pode lecionar (RN06).</p>
+        <p className="muted">Disciplinas que cada professor pode lecionar.</p>
       </header>
 
       <form

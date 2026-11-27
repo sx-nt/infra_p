@@ -58,7 +58,7 @@ function ScheduleEditor({ lookups, qualifications, onSaved, onCancel }) {
     allocations: rows.map((row) => ({ ...row, subjectId: classes[row.classId]?.subjectId || '' })),
   })
 
-  // Carga horária alocada por turma, comparada com a exigida pela disciplina (RN01).
+  // Carga horária alocada por turma, comparada com a exigida pela disciplina.
   const load = termClasses.map((c) => {
     const allocated = rows.filter((r) => r.classId === c.classId).reduce((sum, r) => sum + hours(r.start, r.end), 0)
     return { c, allocated, required: Number(subjects[c.subjectId]?.weeklyHours || 0) }

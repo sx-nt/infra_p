@@ -48,7 +48,7 @@ export default function Availability({ user }) {
       <header className="section-header">
         <h2>{isCoordinator ? 'Disponibilidade dos professores' : 'Minha disponibilidade'}</h2>
         <p className="muted">
-          Horários bloqueados impedem a alocação de aulas (RN03). Horários disponíveis são informativos.
+          Horários bloqueados impedem a alocação de aulas. Horários disponíveis são informativos.
         </p>
       </header>
 
